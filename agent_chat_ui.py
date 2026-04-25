@@ -148,6 +148,28 @@ QLabel#sectionLabel {
     color: #8c9298;
     letter-spacing: 0.03em;
 }
+QPushButton#fieldIconButton {
+    min-width: 32px;
+    max-width: 32px;
+    min-height: 32px;
+    max-height: 32px;
+    padding: 0;
+    border-radius: 10px;
+    font-size: 12pt;
+    font-weight: 700;
+    background: #17191b;
+    border: 1px solid #2a2d30;
+    color: #8c9298;
+}
+QPushButton#fieldIconButton:hover {
+    background: #202326;
+    border-color: #3a3f44;
+    color: #e8eaed;
+}
+QPushButton#fieldIconButton[applied="true"] {
+    color: #f2f3f5;
+    border-color: #f2f3f5;
+}
 QLabel#statusBadge {
     background: #17191b;
     border: 1px solid #2a2d30;
@@ -421,6 +443,9 @@ QComboBox::drop-down {
     border: none;
     width: 28px;
 }
+QComboBox[historyAvailable="false"]::drop-down {
+    width: 0px;
+}
 QComboBox QAbstractItemView {
     background: #151719;
     border: 1px solid #2a2d30;
@@ -534,8 +559,10 @@ class DeletableHistoryComboBox(QComboBox):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self._history_available = True
         self.setItemDelegate(DeletableHistoryDelegate(self))
         self.view().viewport().installEventFilter(self)
+        self.setProperty("historyAvailable", True)
 
     def set_history_items(self, values):
         current = self.currentData() or self.currentText()
@@ -554,6 +581,17 @@ class DeletableHistoryComboBox(QComboBox):
 
     def current_history_value(self):
         return self.currentData() or self.currentText()
+
+    def set_history_available(self, available):
+        self._history_available = available
+        self.setProperty("historyAvailable", available)
+        self.style().unpolish(self)
+        self.style().polish(self)
+
+    def showPopup(self):
+        if not self._history_available:
+            return
+        super().showPopup()
 
     def eventFilter(self, watched, event):
         if watched == self.view().viewport() and event.type() == QEvent.Type.MouseButtonRelease:
@@ -1560,20 +1598,24 @@ class AgentChatWindow(QMainWindow):
         layout.addWidget(server_heading)
 
         server_row = QHBoxLayout()
-        server_row.setSpacing(10)
+        server_row.setSpacing(8)
 
         self.base_url_input = DeletableHistoryComboBox()
         self.base_url_input.setEditable(True)
         self.base_url_input.set_history_items(self.base_url_history)
+        self.base_url_input.set_history_available(bool(self.base_url_history))
         self.base_url_input.setCurrentText(self.base_url)
         self.base_url_input.setPlaceholderText("http://localhost:8080")
         self.base_url_input.lineEdit().returnPressed.connect(self.apply_base_url)
+        self.base_url_input.currentTextChanged.connect(self.on_base_url_text_changed)
         self.base_url_input.activated.connect(self.select_base_url_history_index)
         self.base_url_input.item_delete_requested.connect(self.delete_base_url_history_item)
         server_row.addWidget(self.base_url_input, 1)
 
-        self.apply_url_button = QPushButton("Apply")
-        self.apply_url_button.setObjectName("secondaryButton")
+        self.apply_url_button = QPushButton("✓")
+        self.apply_url_button.setObjectName("fieldIconButton")
+        self.apply_url_button.setToolTip("Apply server URL")
+        self.apply_url_button.setProperty("applied", True)
         self.apply_url_button.clicked.connect(self.apply_base_url)
         server_row.addWidget(self.apply_url_button)
         layout.addLayout(server_row)
@@ -2066,7 +2108,7 @@ class AgentChatWindow(QMainWindow):
             self.set_disconnected_state(f"Failed to refresh models: {exc}")
         finally:
             self.refresh_button.setEnabled(True)
-            self.apply_url_button.setEnabled(True)
+            self.update_base_url_input_state()
             self.update_send_availability()
 
     def populate_models(self, models):
@@ -2100,9 +2142,23 @@ class AgentChatWindow(QMainWindow):
     def build_server_url(self, path):
         return f"{self.base_url}{path}"
 
+    def on_base_url_text_changed(self, _text):
+        self.update_base_url_input_state()
+
+    def update_base_url_input_state(self):
+        if not hasattr(self, "apply_url_button"):
+            return
+        current = self.normalize_base_url(self.base_url_input.currentText())
+        applied = bool(current) and current == self.base_url
+        self.apply_url_button.setProperty("applied", applied)
+        self.apply_url_button.setEnabled(bool(current))
+        self.apply_url_button.style().unpolish(self.apply_url_button)
+        self.apply_url_button.style().polish(self.apply_url_button)
+
     def refresh_base_url_history_ui(self):
         self.base_url_input.set_history_items(self.base_url_history)
         self.base_url_input.setCurrentText(self.base_url)
+        self.base_url_input.set_history_available(bool(self.base_url_history))
 
     def refresh_session_prompt_history_ui(self):
         self.session_prompt_selector.set_history_items(self.session_prompt_history)
@@ -2160,6 +2216,7 @@ class AgentChatWindow(QMainWindow):
         self.base_url_input.setCurrentText(value)
         self.base_url_detail.setText(f"Base URL for OpenAI-compatible server: {value}")
         self.refresh_base_url_history_ui()
+        self.update_base_url_input_state()
         self.save_config()
         self.refresh_server_state()
 
