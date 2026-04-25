@@ -29,6 +29,7 @@ from PyQt6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMainWindow,
+    QMenu,
     QPushButton,
     QPlainTextEdit,
     QScrollArea,
@@ -1349,6 +1350,9 @@ class AgentChatWindow(QMainWindow):
             "base_urls": [DEFAULT_SERVER_BASE_URL],
             "session_prompt": "",
             "session_prompts": [],
+            "temperature": 0.7,
+            "top_p": 0.9,
+            "top_k": 40,
         }
         if not CONFIG_PATH.exists():
             return default_config
@@ -1367,6 +1371,9 @@ class AgentChatWindow(QMainWindow):
             "base_urls": self.base_url_history,
             "session_prompt": self.current_session_prompt_value(),
             "session_prompts": self.session_prompt_history,
+            "temperature": self.temperature_spin.value() if hasattr(self, "temperature_spin") else 0.7,
+            "top_p": self.top_p_spin.value() if hasattr(self, "top_p_spin") else 0.9,
+            "top_k": self.top_k_spin.value() if hasattr(self, "top_k_spin") else 40,
         }
         try:
             with CONFIG_PATH.open("w", encoding="utf-8") as handle:
@@ -1627,15 +1634,24 @@ class AgentChatWindow(QMainWindow):
 
         session_heading = QLabel("Session prompt")
         session_heading.setObjectName("sectionLabel")
-        layout.addWidget(session_heading)
+        session_header_row = QHBoxLayout()
+        session_header_row.setContentsMargins(0, 0, 0, 0)
+        session_header_row.setSpacing(8)
+        session_header_row.addWidget(session_heading)
+        session_header_row.addStretch()
 
-        self.session_prompt_selector = DeletableHistoryComboBox()
-        self.session_prompt_selector.setEditable(False)
-        self.session_prompt_selector.set_history_items(self.session_prompt_history)
-        self.session_prompt_selector.setEnabled(bool(self.session_prompt_history))
-        self.session_prompt_selector.activated.connect(self.select_session_prompt_history_index)
-        self.session_prompt_selector.item_delete_requested.connect(self.delete_session_prompt_history_item)
-        layout.addWidget(self.session_prompt_selector)
+        self.session_prompt_history_button = QPushButton("▾")
+        self.session_prompt_history_button.setObjectName("fieldIconButton")
+        self.session_prompt_history_button.setToolTip("Select saved session prompt")
+        self.session_prompt_history_button.clicked.connect(self.show_session_prompt_history_menu)
+        session_header_row.addWidget(self.session_prompt_history_button)
+
+        self.apply_prompt_button = QPushButton("✓")
+        self.apply_prompt_button.setObjectName("fieldIconButton")
+        self.apply_prompt_button.setToolTip("Apply current session prompt")
+        self.apply_prompt_button.clicked.connect(self.apply_session_prompt)
+        session_header_row.addWidget(self.apply_prompt_button)
+        layout.addLayout(session_header_row)
 
         self.system_prompt_input = QPlainTextEdit()
         self.system_prompt_input.setPlaceholderText("Optional instruction to lock in for this session.")
@@ -1657,11 +1673,6 @@ class AgentChatWindow(QMainWindow):
 
         prompt_actions = QHBoxLayout()
         prompt_actions.setSpacing(10)
-
-        self.apply_prompt_button = QPushButton("Apply prompt")
-        self.apply_prompt_button.setObjectName("secondaryButton")
-        self.apply_prompt_button.clicked.connect(self.apply_session_prompt)
-        prompt_actions.addWidget(self.apply_prompt_button)
 
         self.unlock_prompt_button = QPushButton("Edit draft")
         self.unlock_prompt_button.setObjectName("secondaryButton")
@@ -1717,19 +1728,22 @@ class AgentChatWindow(QMainWindow):
         self.temperature_spin.setRange(0.0, 2.0)
         self.temperature_spin.setDecimals(2)
         self.temperature_spin.setSingleStep(0.05)
-        self.temperature_spin.setValue(0.7)
+        self.temperature_spin.setValue(float(self.config.get("temperature", 0.7)))
+        self.temperature_spin.valueChanged.connect(lambda _value: self.save_config())
         sampling_layout.addRow("Temperature", self.temperature_spin)
 
         self.top_p_spin = QDoubleSpinBox()
         self.top_p_spin.setRange(0.0, 1.0)
         self.top_p_spin.setDecimals(2)
         self.top_p_spin.setSingleStep(0.05)
-        self.top_p_spin.setValue(0.9)
+        self.top_p_spin.setValue(float(self.config.get("top_p", 0.9)))
+        self.top_p_spin.valueChanged.connect(lambda _value: self.save_config())
         sampling_layout.addRow("Top P", self.top_p_spin)
 
         self.top_k_spin = QSpinBox()
         self.top_k_spin.setRange(1, 200)
-        self.top_k_spin.setValue(40)
+        self.top_k_spin.setValue(int(self.config.get("top_k", 40)))
+        self.top_k_spin.valueChanged.connect(lambda _value: self.save_config())
         sampling_layout.addRow("Top K", self.top_k_spin)
         layout.addLayout(sampling_layout)
 
@@ -2161,8 +2175,8 @@ class AgentChatWindow(QMainWindow):
         self.base_url_input.set_history_available(bool(self.base_url_history))
 
     def refresh_session_prompt_history_ui(self):
-        self.session_prompt_selector.set_history_items(self.session_prompt_history)
-        self.session_prompt_selector.setEnabled(bool(self.session_prompt_history))
+        if hasattr(self, "session_prompt_history_button"):
+            self.session_prompt_history_button.setEnabled(bool(self.session_prompt_history))
 
     def select_base_url_history_index(self, index):
         value = self.base_url_input.itemData(index) or self.base_url_input.itemText(index)
@@ -2202,9 +2216,27 @@ class AgentChatWindow(QMainWindow):
         self.refresh_session_prompt_history_ui()
         self.save_config()
 
-    def select_session_prompt_history_index(self, index):
-        value = self.session_prompt_selector.itemData(index) or self.session_prompt_selector.itemText(index)
-        self.select_session_prompt_history(value)
+    def show_session_prompt_history_menu(self):
+        if not self.session_prompt_history:
+            return
+
+        menu = QMenu(self)
+        for value in self.session_prompt_history:
+            display_value = " ".join(value.split())
+            if len(display_value) > 90:
+                display_value = display_value[:87] + "..."
+            action = menu.addAction(display_value)
+            action.triggered.connect(lambda _checked=False, prompt=value: self.select_session_prompt_history(prompt))
+
+        delete_menu = menu.addMenu("Delete saved prompt")
+        for value in self.session_prompt_history:
+            display_value = " ".join(value.split())
+            if len(display_value) > 90:
+                display_value = display_value[:87] + "..."
+            action = delete_menu.addAction(display_value)
+            action.triggered.connect(lambda _checked=False, prompt=value: self.delete_session_prompt_history_item(prompt))
+
+        menu.exec(self.session_prompt_history_button.mapToGlobal(self.session_prompt_history_button.rect().bottomLeft()))
 
     def apply_base_url(self):
         value = self.normalize_base_url(self.base_url_input.currentText())
@@ -2408,6 +2440,10 @@ class AgentChatWindow(QMainWindow):
         self.unlock_prompt_button.setVisible(self.session_prompt_locked)
         self.clear_prompt_button.setEnabled(bool(draft_text) and not self.session_prompt_locked)
         self.apply_prompt_button.setEnabled(bool(draft_text) and not self.session_prompt_locked)
+        self.apply_prompt_button.setProperty("applied", self.session_prompt_locked)
+        self.apply_prompt_button.style().unpolish(self.apply_prompt_button)
+        self.apply_prompt_button.style().polish(self.apply_prompt_button)
+        self.refresh_session_prompt_history_ui()
 
     def build_user_message(self, user_text, attachments):
         if not attachments:
