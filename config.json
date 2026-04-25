@@ -1,0 +1,9 @@
+{
+  "base_url": "http://localhost:8080",
+  "base_urls": [
+    "http://localhost:8080"
+  ],
+  "session_prompt": "",
+  "session_prompts": [],
+  "agent_terminal_enabled": false
+}
