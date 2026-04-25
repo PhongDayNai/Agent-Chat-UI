@@ -20,4 +20,8 @@ pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-The runnable application code will be added in the next migration phase.
+## Run
+
+```bash
+python agent_chat_ui.py
+```
