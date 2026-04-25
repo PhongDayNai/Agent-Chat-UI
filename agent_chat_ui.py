@@ -484,7 +484,7 @@ a {
 }
 """
 
-DEFAULT_LLAMA_SERVER_BASE_URL = "http://localhost:8080"
+DEFAULT_SERVER_BASE_URL = "http://localhost:8080"
 CONFIG_PATH = Path(__file__).with_name("config.json")
 PIN_ICON_PATH = Path(__file__).with_name("assets") / "ic_pin.svg"
 CLIPBOARD_IMAGE_DIR = Path(tempfile.gettempdir()) / "agent_chat_ui_clipboard"
@@ -967,7 +967,7 @@ class ImageGalleryDialog(QDialog):
         self.update_view()
 
 
-class OllamaWorker(QThread):
+class ChatCompletionWorker(QThread):
     token_received = pyqtSignal(str)
     thinking_received = pyqtSignal(str)
     generation_started = pyqtSignal()
@@ -977,7 +977,7 @@ class OllamaWorker(QThread):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.stop_requested = False
-        self.base_url = DEFAULT_LLAMA_SERVER_BASE_URL
+        self.base_url = DEFAULT_SERVER_BASE_URL
         self.messages = []
         self.model_name = ""
         self.temperature = 0.7
@@ -1051,7 +1051,7 @@ class OllamaWorker(QThread):
                         self.full_response += token
                         self.token_received.emit(token)
         except requests.exceptions.ConnectionError:
-            self.error_occurred.emit(f"llama-server is not reachable at {self.base_url}.")
+            self.error_occurred.emit(f"OpenAI-compatible server is not reachable at {self.base_url}.")
         except requests.exceptions.Timeout:
             self.error_occurred.emit("The request timed out.")
         except Exception as exc:
@@ -1254,7 +1254,7 @@ class MessageCard(QFrame):
             self.retry_requested.emit(self.retry_text)
 
 
-class OllamaChatUI(QMainWindow):
+class AgentChatWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.worker = None
@@ -1268,7 +1268,7 @@ class OllamaChatUI(QMainWindow):
         self.pending_attachments = []
         self.message_queue = []
         self.available_models = []
-        self.base_url = DEFAULT_LLAMA_SERVER_BASE_URL
+        self.base_url = DEFAULT_SERVER_BASE_URL
         self.config = self.load_config()
         configured_base_url = self.normalize_base_url(self.config.get("base_url", ""))
         if configured_base_url:
@@ -1296,19 +1296,19 @@ class OllamaChatUI(QMainWindow):
 
         self.configure_responsive_metrics()
 
-        self.setWindowTitle("Local Chat")
+        self.setWindowTitle("Agent Chat")
         self.setStyleSheet(APP_STYLE)
         self.resize(self.default_window_width, self.default_window_height)
         self.setMinimumSize(520, 420)
 
         self.build_ui()
         QApplication.instance().focusChanged.connect(self.on_focus_changed)
-        QTimer.singleShot(0, self.refresh_ollama_state)
+        QTimer.singleShot(0, self.refresh_server_state)
 
     def load_config(self):
         default_config = {
-            "base_url": DEFAULT_LLAMA_SERVER_BASE_URL,
-            "base_urls": [DEFAULT_LLAMA_SERVER_BASE_URL],
+            "base_url": DEFAULT_SERVER_BASE_URL,
+            "base_urls": [DEFAULT_SERVER_BASE_URL],
             "session_prompt": "",
             "session_prompts": [],
         }
@@ -1485,7 +1485,7 @@ class OllamaChatUI(QMainWindow):
         content_layout.setContentsMargins(0, 0, 10, 0)
         content_layout.setSpacing(16)
 
-        title = QLabel("Local Chat")
+        title = QLabel("Agent Chat")
         title.setObjectName("titleLabel")
         content_layout.addWidget(title)
 
@@ -1514,7 +1514,7 @@ class OllamaChatUI(QMainWindow):
         self.refresh_button = QPushButton("Refresh")
         self.refresh_button.setObjectName("ghostButton")
         self.refresh_button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.refresh_button.clicked.connect(self.refresh_ollama_state)
+        self.refresh_button.clicked.connect(self.refresh_server_state)
         buttons_row.addWidget(self.refresh_button)
 
         self.clear_button = QPushButton("New session")
@@ -1578,7 +1578,7 @@ class OllamaChatUI(QMainWindow):
         server_row.addWidget(self.apply_url_button)
         layout.addLayout(server_row)
 
-        self.base_url_detail = QLabel(f"Base URL for llama-server: {self.base_url}")
+        self.base_url_detail = QLabel(f"Base URL for OpenAI-compatible server: {self.base_url}")
         self.base_url_detail.setObjectName("subtleLabel")
         self.base_url_detail.setWordWrap(True)
         layout.addWidget(self.base_url_detail)
@@ -1715,7 +1715,7 @@ class OllamaChatUI(QMainWindow):
         actions.setSpacing(10)
 
         refresh = QPushButton("Refresh models")
-        refresh.clicked.connect(self.refresh_ollama_state)
+        refresh.clicked.connect(self.refresh_server_state)
         actions.addWidget(refresh)
 
         clear = QPushButton("New session")
@@ -2029,8 +2029,8 @@ class OllamaChatUI(QMainWindow):
         if self.sidebar_open:
             self.sync_sidebar_width(self.target_sidebar_width())
 
-    def refresh_ollama_state(self):
-        self.status_badge.setText("Checking llama-server…")
+    def refresh_server_state(self):
+        self.status_badge.setText("Checking OpenAI-compatible server…")
         self.status_detail.setText(f"Refreshing server state from {self.base_url}.")
         self.model_selector.setEnabled(False)
         self.refresh_button.setEnabled(False)
@@ -2041,12 +2041,12 @@ class OllamaChatUI(QMainWindow):
             models_url = self.build_server_url("/v1/models")
             health_response = requests.get(health_url, timeout=2)
             if health_response.status_code != 200:
-                self.set_disconnected_state(f"llama-server health returned HTTP {health_response.status_code}.")
+                self.set_disconnected_state(f"OpenAI-compatible server health returned HTTP {health_response.status_code}.")
                 return
 
             response = requests.get(models_url, timeout=2)
             if response.status_code != 200:
-                self.set_disconnected_state(f"llama-server returned HTTP {response.status_code}.")
+                self.set_disconnected_state(f"OpenAI-compatible server returned HTTP {response.status_code}.")
                 return
 
             payload = response.json()
@@ -2059,9 +2059,9 @@ class OllamaChatUI(QMainWindow):
                 self.status_detail.setText(f"{len(models)} model(s) available from {self.base_url}.")
             else:
                 self.status_badge.setText("No models loaded")
-                self.status_detail.setText(f"Start llama-server with a loaded model at {self.base_url}.")
+                self.status_detail.setText(f"Start OpenAI-compatible server with a loaded model at {self.base_url}.")
         except requests.exceptions.ConnectionError:
-            self.set_disconnected_state(f"llama-server is not reachable at {self.base_url}.")
+            self.set_disconnected_state(f"OpenAI-compatible server is not reachable at {self.base_url}.")
         except Exception as exc:
             self.set_disconnected_state(f"Failed to refresh models: {exc}")
         finally:
@@ -2123,10 +2123,10 @@ class OllamaChatUI(QMainWindow):
         value = self.normalize_base_url(value)
         self.base_url_history = [item for item in self.base_url_history if item != value]
         if not self.base_url_history:
-            self.base_url_history = [DEFAULT_LLAMA_SERVER_BASE_URL]
+            self.base_url_history = [DEFAULT_SERVER_BASE_URL]
         if self.base_url == value:
             self.base_url = self.base_url_history[0]
-            self.base_url_detail.setText(f"Base URL for llama-server: {self.base_url}")
+            self.base_url_detail.setText(f"Base URL for OpenAI-compatible server: {self.base_url}")
         self.refresh_base_url_history_ui()
         self.save_config()
 
@@ -2158,10 +2158,10 @@ class OllamaChatUI(QMainWindow):
         self.base_url = value
         self.base_url_history = self.add_history_value(self.base_url_history, value)
         self.base_url_input.setCurrentText(value)
-        self.base_url_detail.setText(f"Base URL for llama-server: {value}")
+        self.base_url_detail.setText(f"Base URL for OpenAI-compatible server: {value}")
         self.refresh_base_url_history_ui()
         self.save_config()
-        self.refresh_ollama_state()
+        self.refresh_server_state()
 
     def update_send_availability(self):
         has_text = bool(self.composer.toPlainText().strip()) or bool(self.pending_attachments)
@@ -2249,7 +2249,7 @@ class OllamaChatUI(QMainWindow):
         self.status_badge.setText("Generating")
         self.status_detail.setText(f"Streaming from {submission['model_name']}.{suffix}")
 
-        self.worker = OllamaWorker(self)
+        self.worker = ChatCompletionWorker(self)
         self.worker.configure(
             base_url=self.base_url,
             model_name=submission["model_name"],
@@ -2541,7 +2541,7 @@ def main():
     app.setStyle("Fusion")
     app.setFont(QFont("IBM Plex Sans", 10))
 
-    window = OllamaChatUI()
+    window = AgentChatWindow()
     window.show()
     sys.exit(app.exec())
 
