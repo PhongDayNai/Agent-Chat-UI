@@ -11,6 +11,7 @@ import signal
 import subprocess
 import threading
 import time
+import xml.etree.ElementTree as ET
 
 import requests
 from PyQt6.QtCore import QThread, pyqtSignal
@@ -384,6 +385,7 @@ class ChatCompletionWorker(QThread):
     def run_windows_terminal_command(self, command):
         process = None
         output_queue = queue.Queue()
+        stderr_clixml_parts = []
         reader_threads = []
         try:
             encoded_command = self.windows_powershell_encoded_command(command)
@@ -421,7 +423,8 @@ class ChatCompletionWorker(QThread):
             while process.poll() is None or any(thread.is_alive() for thread in reader_threads):
                 if self.stop_requested:
                     self.terminate_terminal_process(process)
-                    self.drain_windows_terminal_output(output_queue, output_parts)
+                    self.drain_windows_terminal_output(output_queue, output_parts, stderr_clixml_parts)
+                    self.flush_windows_clixml_output(stderr_clixml_parts, output_parts)
                     self.terminal_log_received.emit("\n[stopped]\n")
                     return {
                         "exit_code": None,
@@ -431,7 +434,8 @@ class ChatCompletionWorker(QThread):
                     }
                 if time.monotonic() >= deadline:
                     self.terminate_terminal_process(process, force=True)
-                    self.drain_windows_terminal_output(output_queue, output_parts)
+                    self.drain_windows_terminal_output(output_queue, output_parts, stderr_clixml_parts)
+                    self.flush_windows_clixml_output(stderr_clixml_parts, output_parts)
                     return {
                         "exit_code": None,
                         "timed_out": True,
@@ -443,9 +447,10 @@ class ChatCompletionWorker(QThread):
                     stream_name, chunk = output_queue.get(timeout=0.1)
                 except queue.Empty:
                     continue
-                self.append_windows_terminal_output(stream_name, chunk, output_parts)
+                self.append_windows_terminal_output(stream_name, chunk, output_parts, stderr_clixml_parts)
 
-            self.drain_windows_terminal_output(output_queue, output_parts)
+            self.drain_windows_terminal_output(output_queue, output_parts, stderr_clixml_parts)
+            self.flush_windows_clixml_output(stderr_clixml_parts, output_parts)
             if self.stop_requested:
                 return {
                     "exit_code": None,
@@ -478,6 +483,7 @@ class ChatCompletionWorker(QThread):
             "[Console]::OutputEncoding = $__acuEncoding\n"
             "[Console]::InputEncoding = $__acuEncoding\n"
             "$OutputEncoding = $__acuEncoding\n"
+            "$ProgressPreference = 'SilentlyContinue'\n"
             f"{command}"
         )
         return base64.b64encode(script.encode("utf-16le")).decode("ascii")
@@ -497,20 +503,65 @@ class ChatCompletionWorker(QThread):
             except Exception:
                 pass
 
-    def append_windows_terminal_output(self, stream_name, chunk, output_parts):
+    def append_windows_terminal_output(self, stream_name, chunk, output_parts, stderr_clixml_parts=None):
         text = chunk.decode("utf-8", errors="replace")
         if stream_name == "stderr":
+            if stderr_clixml_parts is not None and (
+                stderr_clixml_parts or text.lstrip().startswith("#< CLIXML")
+            ):
+                stderr_clixml_parts.append(text)
+                return
             text = f"[stderr] {text}"
         output_parts.append(text)
         self.terminal_log_received.emit(text)
 
-    def drain_windows_terminal_output(self, output_queue, output_parts):
+    def drain_windows_terminal_output(self, output_queue, output_parts, stderr_clixml_parts=None):
         while True:
             try:
                 stream_name, chunk = output_queue.get_nowait()
             except queue.Empty:
                 break
-            self.append_windows_terminal_output(stream_name, chunk, output_parts)
+            self.append_windows_terminal_output(stream_name, chunk, output_parts, stderr_clixml_parts)
+
+    def flush_windows_clixml_output(self, stderr_clixml_parts, output_parts):
+        if not stderr_clixml_parts:
+            return
+        clixml_text = "".join(stderr_clixml_parts)
+        stderr_clixml_parts.clear()
+        for message in self.parse_windows_clixml_messages(clixml_text):
+            text = f"[stderr] {message}\n"
+            output_parts.append(text)
+            self.terminal_log_received.emit(text)
+
+    def parse_windows_clixml_messages(self, clixml_text):
+        xml_text = clixml_text.lstrip()
+        if xml_text.startswith("#< CLIXML"):
+            xml_text = xml_text[len("#< CLIXML"):].lstrip()
+        if not xml_text:
+            return []
+        try:
+            root = ET.fromstring(xml_text)
+        except ET.ParseError:
+            return []
+        messages = []
+        for obj in root.findall(".//{*}Obj"):
+            stream_name = (obj.attrib.get("S") or "").lower()
+            if stream_name in {"progress", "information"}:
+                continue
+            message = self.windows_clixml_object_text(obj)
+            if message:
+                messages.append(message)
+        return messages
+
+    def windows_clixml_object_text(self, obj):
+        to_string = obj.find("{*}ToString")
+        if to_string is not None and to_string.text:
+            return to_string.text.strip()
+        for node in obj.iter():
+            if node.tag.endswith("}S") or node.tag == "S":
+                if node.text:
+                    return node.text.strip()
+        return ""
 
     def terminate_terminal_process(self, process, force=False):
         if IS_WINDOWS:
