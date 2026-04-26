@@ -2328,6 +2328,7 @@ class AgentChatWindow(QMainWindow):
 
     def make_submission(self, user_text, attachments):
         prompt_text = user_text.strip()
+        self.set_status_message("Preparing message...")
         user_message = self.build_user_message(prompt_text, attachments)
         user_display = prompt_text or "Sent attachments."
         if attachments:
@@ -2341,6 +2342,13 @@ class AgentChatWindow(QMainWindow):
             "model_name": self.model_selector.currentText().strip(),
         }
 
+    def try_make_submission(self, user_text, attachments):
+        try:
+            return self.make_submission(user_text, attachments)
+        except ValueError as exc:
+            self.set_status_message(str(exc))
+            return None
+
     def enqueue_current_input(self):
         user_text = self.composer.toPlainText().strip()
         attachments = list(self.pending_attachments)
@@ -2352,7 +2360,9 @@ class AgentChatWindow(QMainWindow):
             self.set_status_message("Select a model before sending.")
             return False
 
-        submission = self.make_submission(user_text, attachments)
+        submission = self.try_make_submission(user_text, attachments)
+        if submission is None:
+            return False
         self.message_queue.append(submission)
         self.composer.clear()
         self.clear_attachments()
@@ -2537,7 +2547,9 @@ class AgentChatWindow(QMainWindow):
             self.set_status_message("Select a model before sending.")
             return
 
-        submission = self.make_submission(user_text, attachments)
+        submission = self.try_make_submission(user_text, attachments)
+        if submission is None:
+            return
         self.composer.clear()
         self.clear_attachments()
         self.process_submission(submission)
