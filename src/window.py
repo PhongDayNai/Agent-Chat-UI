@@ -24,6 +24,7 @@ from PyQt6.QtWidgets import (
     QLineEdit,
     QMainWindow,
     QMenu,
+    QMessageBox,
     QPlainTextEdit,
     QPushButton,
     QScrollArea,
@@ -40,7 +41,8 @@ except ImportError:
     PdfReader = None
 
 from constants import (
-    AGENT_TERMINAL_PROMPT,
+    APP_LOGO_PATH,
+    APP_WORKSPACE,
     CONFIG_PATH,
     DEFAULT_SERVER_BASE_URL,
     DEFAULT_PERMISSIONS_ICON_PATH,
@@ -54,6 +56,7 @@ from constants import (
     TRAILING_URL_PUNCTUATION,
     URL_FETCH_TIMEOUT,
     URL_RE,
+    agent_terminal_prompt,
 )
 from html_utils import HtmlTextExtractor
 from markdown_utils import normalize_terminal_fences, replace_terminal_command_tags
@@ -106,6 +109,7 @@ class AgentChatWindow(QMainWindow):
         rendering_config = self.config.get("assistant_rendering", {})
         sampling_config = self.config.get("sampling", {})
         ui_config = self.config.get("ui", {})
+        workspace_config = self.config.get("workspace", {})
 
         self.server_enabled = bool(server_config.get("enabled", True))
         configured_base_url = self.normalize_base_url(server_config.get("base_url", ""))
@@ -141,6 +145,9 @@ class AgentChatWindow(QMainWindow):
         )
         self.show_thinking = bool(ui_config.get("show_thinking", False))
         self.pin_panel = bool(ui_config.get("pin_panel", False))
+        self.workspace_path_config = str(workspace_config.get("path", "")).strip()
+        self.workspace_path = self.resolve_workspace_path(self.workspace_path_config)
+        self.workspace_prompt_checked = False
         self.pending_terminal_permission = None
         self.assistant_reply_focus_active = False
         self.assistant_reply_focus_card = None
@@ -160,12 +167,14 @@ class AgentChatWindow(QMainWindow):
         self.configure_responsive_metrics()
 
         self.setWindowTitle("Agent Chat")
+        self.setWindowIcon(QIcon(str(APP_LOGO_PATH)))
         self.setStyleSheet(APP_STYLE)
         self.resize(self.default_window_width, self.default_window_height)
         self.setMinimumSize(520, 420)
 
         self.build_ui()
         QApplication.instance().focusChanged.connect(self.on_focus_changed)
+        QTimer.singleShot(0, self.prompt_for_workspace_if_needed)
         QTimer.singleShot(0, self.refresh_server_state)
 
     def load_config(self):
@@ -184,6 +193,9 @@ class AgentChatWindow(QMainWindow):
                 "enabled": True,
                 "permission": TERMINAL_PERMISSION_DEFAULT,
                 "default_permissions": list(DEFAULT_TERMINAL_PERMISSIONS),
+            },
+            "workspace": {
+                "path": "",
             },
             "sampling": {
                 "enabled": True,
@@ -231,6 +243,9 @@ class AgentChatWindow(QMainWindow):
                 "permission": self.agent_terminal_permission,
                 "default_permissions": self.default_permissions,
             },
+            "workspace": {
+                "path": self.workspace_path_config if hasattr(self, "workspace_path_config") else "",
+            },
             "sampling": {
                 "enabled": self.sampling_enabled,
                 "temperature": self.temperature_spin.value() if hasattr(self, "temperature_spin") else 0.7,
@@ -268,6 +283,7 @@ class AgentChatWindow(QMainWindow):
         server_payload = payload.get("server") if isinstance(payload.get("server"), dict) else {}
         session_payload = payload.get("session_prompt") if isinstance(payload.get("session_prompt"), dict) else {}
         terminal_payload = payload.get("agent_terminal") if isinstance(payload.get("agent_terminal"), dict) else {}
+        workspace_payload = payload.get("workspace") if isinstance(payload.get("workspace"), dict) else {}
         sampling_payload = payload.get("sampling") if isinstance(payload.get("sampling"), dict) else {}
         rendering_payload = (
             payload.get("assistant_rendering")
@@ -296,6 +312,11 @@ class AgentChatWindow(QMainWindow):
                 "enabled": terminal_payload.get("enabled", payload.get("agent_terminal_enabled", default_config["agent_terminal"]["enabled"])),
                 "permission": terminal_payload.get("permission", payload.get("agent_terminal_permission", default_config["agent_terminal"]["permission"])),
                 "default_permissions": terminal_payload.get("default_permissions", payload.get("default_permissions", default_config["agent_terminal"]["default_permissions"])),
+            },
+            "workspace": {
+                **default_config["workspace"],
+                **workspace_payload,
+                "path": workspace_payload.get("path", payload.get("workspace_path", default_config["workspace"]["path"])),
             },
             "sampling": {
                 **default_config["sampling"],
@@ -412,6 +433,75 @@ class AgentChatWindow(QMainWindow):
             return self.system_prompt_input.toPlainText().strip()
         return self.initial_session_prompt
 
+    def resolve_workspace_path(self, value):
+        path_text = str(value or "").strip()
+        if path_text:
+            path = Path(path_text).expanduser()
+            if path.exists() and path.is_dir():
+                return path
+        return APP_WORKSPACE
+
+    def apply_workspace_path(self):
+        value = self.workspace_input.text().strip() if hasattr(self, "workspace_input") else ""
+        if not value:
+            self.workspace_path_config = ""
+            self.workspace_path = APP_WORKSPACE
+            self.save_config()
+            self.refresh_workspace_ui()
+            self.set_status_message(f"Workspace reset to default: {self.workspace_path}")
+            return
+        path = Path(value).expanduser()
+        if not path.exists() or not path.is_dir():
+            self.set_status_message(f"Workspace does not exist: {path}")
+            return
+        self.workspace_path_config = str(path)
+        self.workspace_path = path
+        self.save_config()
+        self.refresh_workspace_ui()
+        self.set_status_message(f"Workspace set to {self.workspace_path}")
+
+    def choose_workspace(self):
+        directory = QFileDialog.getExistingDirectory(
+            self,
+            "Select workspace",
+            str(self.workspace_path),
+        )
+        if not directory:
+            return False
+        self.workspace_path_config = directory
+        self.workspace_path = Path(directory)
+        self.save_config()
+        self.refresh_workspace_ui()
+        self.set_status_message(f"Workspace set to {self.workspace_path}")
+        return True
+
+    def prompt_for_workspace_if_needed(self):
+        if self.workspace_prompt_checked or self.workspace_path_config:
+            return
+        self.workspace_prompt_checked = True
+        response = QMessageBox.question(
+            self,
+            "Select workspace",
+            (
+                "Choose a workspace folder for terminal commands?\n\n"
+                f"If you skip, Agent Chat uses {APP_WORKSPACE} for this session."
+            ),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        if response == QMessageBox.StandardButton.Yes and self.choose_workspace():
+            return
+        self.refresh_workspace_ui()
+        self.set_status_message(f"Using default workspace: {self.workspace_path}")
+
+    def refresh_workspace_ui(self):
+        if hasattr(self, "workspace_input"):
+            self.workspace_input.blockSignals(True)
+            self.workspace_input.setText(self.workspace_path_config)
+            self.workspace_input.blockSignals(False)
+        if hasattr(self, "workspace_detail"):
+            self.workspace_detail.setText(f"Terminal commands run in: {self.workspace_path}")
+
     def configure_responsive_metrics(self):
         screen = QGuiApplication.primaryScreen()
         if screen is None:
@@ -486,6 +576,7 @@ class AgentChatWindow(QMainWindow):
         root.addLayout(content_stack, 1)
 
         self.build_toast()
+        self.refresh_workspace_ui()
         self.refresh_session_prompt_ui()
         self.refresh_rendering_ui()
         self.refresh_terminal_permission_ui()
@@ -695,6 +786,44 @@ class AgentChatWindow(QMainWindow):
         server_section_layout.addWidget(self.base_url_detail)
         self.server_section.setVisible(self.server_enabled)
         layout.addWidget(self.server_section)
+
+        self.workspace_section = QWidget()
+        workspace_section_layout = QVBoxLayout(self.workspace_section)
+        workspace_section_layout.setContentsMargins(0, 0, 0, 0)
+        workspace_section_layout.setSpacing(10)
+
+        workspace_heading = QLabel("Workspace")
+        workspace_heading.setObjectName("sectionLabel")
+        workspace_header_row = QHBoxLayout()
+        workspace_header_row.setContentsMargins(0, 0, 0, 0)
+        workspace_header_row.setSpacing(8)
+        workspace_header_row.addWidget(workspace_heading)
+        workspace_header_row.addStretch()
+
+        self.choose_workspace_button = QPushButton("…")
+        self.choose_workspace_button.setObjectName("fieldIconButton")
+        self.choose_workspace_button.setToolTip("Choose workspace folder")
+        self.choose_workspace_button.clicked.connect(self.choose_workspace)
+        workspace_header_row.addWidget(self.choose_workspace_button)
+
+        self.apply_workspace_button = QPushButton("✓")
+        self.apply_workspace_button.setObjectName("fieldIconButton")
+        self.apply_workspace_button.setToolTip("Apply workspace path")
+        self.apply_workspace_button.clicked.connect(self.apply_workspace_path)
+        workspace_header_row.addWidget(self.apply_workspace_button)
+        workspace_section_layout.addLayout(workspace_header_row)
+
+        self.workspace_input = QLineEdit()
+        self.workspace_input.setPlaceholderText(str(APP_WORKSPACE))
+        self.workspace_input.setText(self.workspace_path_config)
+        self.workspace_input.returnPressed.connect(self.apply_workspace_path)
+        workspace_section_layout.addWidget(self.workspace_input)
+
+        self.workspace_detail = QLabel("")
+        self.workspace_detail.setObjectName("subtleLabel")
+        self.workspace_detail.setWordWrap(True)
+        workspace_section_layout.addWidget(self.workspace_detail)
+        layout.addWidget(self.workspace_section)
 
         self.session_prompt_section = QWidget()
         session_section_layout = QVBoxLayout(self.session_prompt_section)
@@ -1127,7 +1256,7 @@ class AgentChatWindow(QMainWindow):
         self.save_config()
         self.refresh_terminal_permission_ui()
         self.set_status_message(
-            "Terminal agent enabled. Commands run in the app workspace."
+            f"Terminal agent enabled. Commands run in {self.workspace_path}."
             if self.agent_terminal_enabled
             else "Terminal agent disabled."
         )
@@ -1999,6 +2128,7 @@ class AgentChatWindow(QMainWindow):
             agent_terminal_enabled=self.agent_terminal_enabled,
             agent_terminal_permission=self.agent_terminal_permission,
             default_permissions=self.default_permissions,
+            terminal_cwd=str(self.workspace_path),
         )
         self.worker.token_received.connect(self.on_token_received)
         self.worker.thinking_received.connect(self.on_thinking_received)
@@ -2176,7 +2306,7 @@ class AgentChatWindow(QMainWindow):
         messages = []
         system_sections = []
         if self.agent_terminal_enabled:
-            system_sections.append(AGENT_TERMINAL_PROMPT)
+            system_sections.append(agent_terminal_prompt(self.workspace_path))
         if self.session_prompt_enabled and self.session_system_prompt:
             system_sections.append(self.session_system_prompt)
         if system_sections:

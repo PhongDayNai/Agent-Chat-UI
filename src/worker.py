@@ -15,9 +15,11 @@ from PyQt6.QtCore import QThread, pyqtSignal
 from constants import (
     APP_WORKSPACE,
     DEFAULT_SERVER_BASE_URL,
+    IS_WINDOWS,
     MAX_AGENT_TERMINAL_STEPS,
     TERMINAL_COMMAND_RE,
     TERMINAL_OUTPUT_LIMIT,
+    TERMINAL_SHELL_NAME,
     TERMINAL_TIMEOUT_SECONDS,
 )
 
@@ -61,6 +63,7 @@ class ChatCompletionWorker(QThread):
         agent_terminal_enabled=False,
         agent_terminal_permission="default",
         default_permissions=None,
+        terminal_cwd=None,
     ):
         self.base_url = base_url
         self.model_name = model_name
@@ -71,6 +74,7 @@ class ChatCompletionWorker(QThread):
         self.agent_terminal_enabled = bool(agent_terminal_enabled)
         self.agent_terminal_permission = agent_terminal_permission
         self.default_permissions = set(default_permissions or [])
+        self.terminal_cwd = terminal_cwd or APP_WORKSPACE
 
     def run(self):
         self.stop_requested = False
@@ -112,7 +116,7 @@ class ChatCompletionWorker(QThread):
                     )
                     continue
 
-                self.terminal_command_started.emit(command, "Bash")
+                self.terminal_command_started.emit(command, TERMINAL_SHELL_NAME)
                 terminal_result = self.run_terminal_command(command)
                 rendered_result = self.render_terminal_result(command, terminal_result)
                 self.terminal_command_finished.emit(self.terminal_status_text(terminal_result))
@@ -247,15 +251,19 @@ class ChatCompletionWorker(QThread):
             self.permission_condition.notify_all()
 
     def run_terminal_command(self, command):
+        if IS_WINDOWS:
+            return self.run_windows_terminal_command(command)
+        return self.run_posix_terminal_command(command)
+
+    def run_posix_terminal_command(self, command):
         process = None
         selector = None
         output_parts = []
         try:
             process = subprocess.Popen(
-                command,
+                ["/bin/bash", "-lc", command],
                 cwd=str(self.terminal_cwd),
-                shell=True,
-                executable="/bin/bash",
+                shell=False,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 start_new_session=True,
@@ -324,6 +332,67 @@ class ChatCompletionWorker(QThread):
             if selector is not None:
                 selector.close()
 
+    def run_windows_terminal_command(self, command):
+        process = None
+        try:
+            process = subprocess.Popen(
+                [
+                    "powershell.exe",
+                    "-NoLogo",
+                    "-NoProfile",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-Command",
+                    command,
+                ],
+                cwd=str(self.terminal_cwd),
+                shell=False,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0),
+            )
+            try:
+                stdout, stderr = process.communicate(timeout=TERMINAL_TIMEOUT_SECONDS)
+            except subprocess.TimeoutExpired:
+                self.terminate_terminal_process(process, force=True)
+                stdout, stderr = process.communicate()
+                return {
+                    "exit_code": None,
+                    "timed_out": True,
+                    "stopped": False,
+                    "output": self.truncate_terminal_output(self.combine_terminal_streams(stdout, stderr).strip()),
+                }
+            if self.stop_requested:
+                return {
+                    "exit_code": None,
+                    "timed_out": False,
+                    "stopped": True,
+                    "output": self.truncate_terminal_output(self.combine_terminal_streams(stdout, stderr).strip() or "Terminal command stopped."),
+                }
+            output = self.combine_terminal_streams(stdout, stderr).strip()
+            if stdout:
+                self.terminal_log_received.emit(stdout)
+            if stderr:
+                self.terminal_log_received.emit(f"[stderr] {stderr}")
+            return {
+                "exit_code": process.returncode,
+                "timed_out": False,
+                "stopped": False,
+                "output": self.truncate_terminal_output(output),
+            }
+        except Exception as exc:
+            if process is not None and process.poll() is None:
+                self.terminate_terminal_process(process, force=True)
+            return {
+                "exit_code": None,
+                "timed_out": False,
+                "stopped": False,
+                "output": f"Unable to run terminal command: {exc}",
+            }
+
     def combine_terminal_streams(self, stdout, stderr):
         stdout = stdout or ""
         stderr = stderr or ""
@@ -332,6 +401,19 @@ class ChatCompletionWorker(QThread):
         return stdout
 
     def terminate_terminal_process(self, process, force=False):
+        if IS_WINDOWS:
+            try:
+                if force:
+                    process.kill()
+                else:
+                    process.terminate()
+                process.wait(timeout=1)
+            except Exception:
+                try:
+                    process.kill()
+                except Exception:
+                    pass
+            return
         sig = signal.SIGKILL if force else signal.SIGTERM
         try:
             os.killpg(process.pid, sig)

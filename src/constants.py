@@ -8,7 +8,8 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 RESOURCE_ROOT = Path(getattr(sys, "_MEIPASS", PROJECT_ROOT))
-APP_WORKSPACE = PROJECT_ROOT
+APP_WORKSPACE = Path.home()
+IS_WINDOWS = sys.platform == "win32"
 
 
 def resource_path(relative_path):
@@ -36,6 +37,7 @@ DEFAULT_SERVER_BASE_URL = "http://localhost:8080"
 CONFIG_PATH = user_config_path()
 LEGACY_CONFIG_PATH = resource_path("config.json")
 ASSETS_DIR = resource_path("assets")
+APP_LOGO_PATH = ASSETS_DIR / "app_logo.png"
 PIN_ICON_PATH = ASSETS_DIR / "ic_pin.svg"
 ARROW_UP_ICON_PATH = ASSETS_DIR / "ic_arrow_up.svg"
 STOP_ICON_PATH = ASSETS_DIR / "ic_stop.svg"
@@ -67,7 +69,12 @@ TERMINAL_COMMAND_RE = re.compile(
 TERMINAL_OUTPUT_LIMIT = 20000
 TERMINAL_TIMEOUT_SECONDS = 60
 MAX_AGENT_TERMINAL_STEPS = 6
-AGENT_TERMINAL_PROMPT = f"""
+TERMINAL_SHELL_NAME = "PowerShell" if IS_WINDOWS else "Bash"
+TERMINAL_SHELL_DESCRIPTION = "PowerShell" if IS_WINDOWS else "bash"
+
+
+def agent_terminal_prompt(workspace_path):
+    return f"""
 You are running inside a local desktop chat app with terminal access enabled.
 When you need to inspect files or change the workspace, request exactly one terminal command by writing:
 
@@ -78,8 +85,11 @@ command here
 Rules:
 - If the user explicitly asks you to run, execute, check, inspect with, or show the output of a terminal command, request that command with a terminal_command tag instead of saying you cannot run commands.
 - Run commands only when they are useful for the user's request.
-- The command runs with bash in this workspace: {APP_WORKSPACE}
+- The command runs with {TERMINAL_SHELL_DESCRIPTION} in this workspace: {workspace_path}
 - After terminal output is returned, continue from the result.
 - Do not invent terminal output.
 - When the task is complete, answer normally without a terminal_command tag.
 """.strip()
+
+
+AGENT_TERMINAL_PROMPT = agent_terminal_prompt(APP_WORKSPACE)

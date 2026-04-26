@@ -41,7 +41,7 @@ that make local work useful:
 - **Terminal agent mode**  
   When enabled, the assistant can request a shell command with a
   `<terminal_command>...</terminal_command>` block. The app runs the command in
-  the repository workspace and feeds the output back to the model.
+  the configured workspace and feeds the output back to the model.
 
 - **Terminal permission modes**  
   Default permissions allow only configured command names. Full access allows
@@ -120,8 +120,11 @@ pwd
 </terminal_command>
 ```
 
-The command runs with `bash` in this repository workspace. Output is streamed
-into the UI and then passed back to the model so it can continue the answer.
+The command runs in the configured workspace using the platform shell:
+PowerShell on Windows and `bash` on Linux/macOS. If no workspace has been
+selected, the app asks whether to choose one at startup and otherwise uses the
+current user's home folder for that session. Output is streamed into the UI and
+then passed back to the model so it can continue the answer.
 
 Permission modes:
 
@@ -155,6 +158,7 @@ Important sections:
 - `session_prompt`: current prompt and prompt history
 - `agent_terminal`: terminal enabled state, permission mode, and default command
   allowlist
+- `workspace`: optional terminal command workspace path
 - `sampling`: temperature, top-p, and top-k values
 - `assistant_rendering`: streaming debounce settings
 - `ui`: panel pinning and display preferences
