@@ -1,14 +1,13 @@
 """Qt stylesheets for agent-chat-ui."""
 
-from pathlib import Path
+from constants import ASSETS_DIR
 
 
-ASSET_ROOT = Path(__file__).resolve().parent.parent / "assets"
-CHEVRON_DOWN_ICON = ASSET_ROOT / "ic_chevron_down.svg"
-CHEVRON_RIGHT_ICON = ASSET_ROOT / "ic_chevron_right.svg"
-CHECK_ICON = ASSET_ROOT / "ic_menu_check.svg"
-ARROW_DOWN_ICON = ASSET_ROOT / "ic_arrow_down.svg"
-ARROW_DOWN_FULL_ACCESS_ICON = ASSET_ROOT / "ic_arrow_down_full_access.svg"
+CHEVRON_DOWN_ICON = ASSETS_DIR / "ic_chevron_down.svg"
+CHEVRON_RIGHT_ICON = ASSETS_DIR / "ic_chevron_right.svg"
+CHECK_ICON = ASSETS_DIR / "ic_menu_check.svg"
+ARROW_DOWN_ICON = ASSETS_DIR / "ic_arrow_down.svg"
+ARROW_DOWN_FULL_ACCESS_ICON = ASSETS_DIR / "ic_arrow_down_full_access.svg"
 
 
 APP_STYLE = """

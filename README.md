@@ -66,7 +66,7 @@ that make local work useful:
 
 - **Local configuration**  
   Server URL history, session prompt history, terminal settings, sampling
-  settings, and UI state are stored in `config.json`.
+  settings, and UI state are stored in the current user's app config directory.
 
 ## Requirements
 
@@ -125,8 +125,8 @@ into the UI and then passed back to the model so it can continue the answer.
 
 Permission modes:
 
-- **Default permissions**: only commands listed in `config.json` are allowed
-  automatically; other commands require approval.
+- **Default permissions**: only commands listed in the user config file are
+  allowed automatically; other commands require approval.
 - **Full access**: requested commands are allowed without per-command approval.
 
 Terminal execution is local and powerful. Use full access only when you trust
@@ -134,7 +134,20 @@ the model and the current task.
 
 ## Configuration
 
-The app reads and writes `config.json` in the repository root.
+The app reads and writes `acu_config.json` in the current user's app config
+directory:
+
+- Linux: `$XDG_CONFIG_HOME/acu/acu_config.json`, or
+  `~/.config/acu/acu_config.json` when `XDG_CONFIG_HOME` is unset
+- macOS: `~/Library/Application Support/AgentChatUI/acu_config.json`
+- Windows: `%APPDATA%\AgentChatUI\acu_config.json`
+
+For compatibility, if the user config file does not exist yet, the app can read
+the old repository-root `config.json`. Future saves are written to the user
+config path.
+
+Set `ACU_CONFIG_PATH` to override the config file location for testing or
+custom packaging.
 
 Important sections:
 
@@ -170,7 +183,7 @@ src/constants.py      # paths, limits, prompt snippets, regexes
 src/markdown_utils.py # markdown and terminal tag normalization
 src/html_utils.py     # URL HTML-to-text extraction
 assets/               # SVG icons
-config.json           # local user/app configuration
+config.json           # optional legacy local configuration
 ```
 
 ## Notes
@@ -180,4 +193,5 @@ config.json           # local user/app configuration
 - Keep session prompts short when using small context models.
 - Terminal output and fetched URL content are truncated by design to avoid
   overwhelming the model context.
-- `config.json` is local state; review it before sharing the repository.
+- User config is local state; review legacy `config.json` before sharing the
+  repository.

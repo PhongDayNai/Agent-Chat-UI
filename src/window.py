@@ -45,6 +45,7 @@ from constants import (
     DEFAULT_SERVER_BASE_URL,
     DEFAULT_PERMISSIONS_ICON_PATH,
     FULL_ACCESS_ICON_PATH,
+    LEGACY_CONFIG_PATH,
     MAX_ATTACHMENT_TEXT_CHARS,
     MAX_URL_DOWNLOAD_BYTES,
     MAX_URLS_PER_MESSAGE,
@@ -201,10 +202,11 @@ class AgentChatWindow(QMainWindow):
                 "pin_panel": False,
             },
         }
-        if not CONFIG_PATH.exists():
+        config_path = CONFIG_PATH if CONFIG_PATH.exists() else LEGACY_CONFIG_PATH
+        if not config_path.exists():
             return default_config
         try:
-            with CONFIG_PATH.open("r", encoding="utf-8") as handle:
+            with config_path.open("r", encoding="utf-8") as handle:
                 payload = json.load(handle)
         except (OSError, json.JSONDecodeError):
             return default_config
@@ -255,11 +257,12 @@ class AgentChatWindow(QMainWindow):
             },
         }
         try:
+            CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
             with CONFIG_PATH.open("w", encoding="utf-8") as handle:
                 json.dump(payload, handle, indent=2, ensure_ascii=False)
                 handle.write("\n")
         except OSError as exc:
-            self.set_status_message(f"Could not save config.json: {exc}")
+            self.set_status_message(f"Could not save config: {exc}")
 
     def normalize_config(self, payload, default_config):
         server_payload = payload.get("server") if isinstance(payload.get("server"), dict) else {}
@@ -2033,11 +2036,13 @@ class AgentChatWindow(QMainWindow):
         if not value:
             self.set_status_message("Enter a session prompt before applying it.")
             return
+        self.session_system_prompt = value
+        self.session_prompt_locked = True
         self.session_prompt_history = self.add_history_value(self.session_prompt_history, value)
         self.refresh_session_prompt_history_ui()
         self.refresh_session_prompt_ui()
         self.save_config()
-        self.set_status_message("Session prompt saved to config.json.")
+        self.set_status_message("Session prompt saved.")
         self.show_toast("Session prompt saved")
 
     def lock_session_prompt_if_needed(self):
@@ -2169,10 +2174,13 @@ class AgentChatWindow(QMainWindow):
 
     def build_messages_payload(self, user_message):
         messages = []
-        if self.session_prompt_enabled and self.session_system_prompt:
-            messages.append({"role": "system", "content": self.session_system_prompt})
+        system_sections = []
         if self.agent_terminal_enabled:
-            messages.append({"role": "system", "content": AGENT_TERMINAL_PROMPT})
+            system_sections.append(AGENT_TERMINAL_PROMPT)
+        if self.session_prompt_enabled and self.session_system_prompt:
+            system_sections.append(self.session_system_prompt)
+        if system_sections:
+            messages.append({"role": "system", "content": "\n\n".join(system_sections)})
         messages.extend(self.history)
         messages.append(user_message)
         return messages

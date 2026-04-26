@@ -1,15 +1,41 @@
 """Application constants and filesystem paths."""
 
+import os
 import re
+import sys
 import tempfile
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-ASSETS_DIR = PROJECT_ROOT / "assets"
+RESOURCE_ROOT = Path(getattr(sys, "_MEIPASS", PROJECT_ROOT))
 APP_WORKSPACE = PROJECT_ROOT
 
+
+def resource_path(relative_path):
+    for root in (RESOURCE_ROOT, RESOURCE_ROOT / "_internal", PROJECT_ROOT):
+        candidate = root / relative_path
+        if candidate.exists():
+            return candidate
+    return RESOURCE_ROOT / relative_path
+
+
+def user_config_path():
+    """Return the per-user config path for the current OS."""
+    override_path = os.environ.get("ACU_CONFIG_PATH")
+    if override_path:
+        return Path(override_path).expanduser()
+    if sys.platform == "win32":
+        config_root = Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming"))
+        return config_root / "AgentChatUI" / "acu_config.json"
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / "AgentChatUI" / "acu_config.json"
+    return Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "acu" / "acu_config.json"
+
+
 DEFAULT_SERVER_BASE_URL = "http://localhost:8080"
-CONFIG_PATH = PROJECT_ROOT / "config.json"
+CONFIG_PATH = user_config_path()
+LEGACY_CONFIG_PATH = resource_path("config.json")
+ASSETS_DIR = resource_path("assets")
 PIN_ICON_PATH = ASSETS_DIR / "ic_pin.svg"
 ARROW_UP_ICON_PATH = ASSETS_DIR / "ic_arrow_up.svg"
 STOP_ICON_PATH = ASSETS_DIR / "ic_stop.svg"
