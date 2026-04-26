@@ -161,7 +161,7 @@ Important sections:
 - `workspace`: optional terminal command workspace path
 - `sampling`: temperature, top-p, and top-k values
 - `assistant_rendering`: streaming debounce settings
-- `ui`: panel pinning and display preferences
+- `ui`: panel pinning, composer sizing, and display preferences
 
 Most settings can be changed from the app UI and are saved automatically.
 

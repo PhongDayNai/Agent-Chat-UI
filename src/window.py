@@ -81,6 +81,9 @@ TERMINAL_PERMISSION_FULL_ACCESS = "full_access"
 DEFAULT_TERMINAL_PERMISSIONS = ["pwd", "ls", "date", "whoami", "uname"]
 DEFAULT_ASSISTANT_DEBOUNCE_ENABLED = True
 DEFAULT_ASSISTANT_DEBOUNCE_INTERVAL_MS = 45
+DEFAULT_COMPOSER_MAX_LINES = 3
+MIN_COMPOSER_MAX_LINES = 1
+MAX_COMPOSER_MAX_LINES = 20
 TERMINAL_PERMISSION_COLORS = {
     TERMINAL_PERMISSION_DEFAULT: "#f2f3f5",
     TERMINAL_PERMISSION_FULL_ACCESS: "#d5c537",
@@ -145,6 +148,9 @@ class AgentChatWindow(QMainWindow):
         )
         self.show_thinking = bool(ui_config.get("show_thinking", False))
         self.pin_panel = bool(ui_config.get("pin_panel", False))
+        self.composer_max_lines = self.normalize_composer_max_lines(
+            ui_config.get("composer_max_lines", DEFAULT_COMPOSER_MAX_LINES)
+        )
         self.workspace_path_config = str(workspace_config.get("path", "")).strip()
         self.workspace_path = self.resolve_workspace_path(self.workspace_path_config)
         self.workspace_prompt_checked = False
@@ -212,6 +218,7 @@ class AgentChatWindow(QMainWindow):
                 "enabled": True,
                 "show_thinking": False,
                 "pin_panel": False,
+                "composer_max_lines": DEFAULT_COMPOSER_MAX_LINES,
             },
         }
         config_path = CONFIG_PATH if CONFIG_PATH.exists() else LEGACY_CONFIG_PATH
@@ -269,6 +276,11 @@ class AgentChatWindow(QMainWindow):
                     else self.show_thinking
                 ),
                 "pin_panel": self.sidebar_pinned,
+                "composer_max_lines": (
+                    self.composer_max_lines_spin.value()
+                    if hasattr(self, "composer_max_lines_spin")
+                    else self.composer_max_lines
+                ),
             },
         }
         try:
@@ -332,8 +344,19 @@ class AgentChatWindow(QMainWindow):
             "ui": {
                 **default_config["ui"],
                 **ui_payload,
+                "composer_max_lines": ui_payload.get(
+                    "composer_max_lines",
+                    payload.get("composer_max_lines", default_config["ui"]["composer_max_lines"]),
+                ),
             },
         }
+
+    def normalize_composer_max_lines(self, value):
+        try:
+            numeric_value = int(value)
+        except (TypeError, ValueError):
+            numeric_value = DEFAULT_COMPOSER_MAX_LINES
+        return max(MIN_COMPOSER_MAX_LINES, min(MAX_COMPOSER_MAX_LINES, numeric_value))
 
     def clean_history(self, values, normalizer=None):
         cleaned = []
@@ -886,6 +909,28 @@ class AgentChatWindow(QMainWindow):
         self.session_prompt_section.setVisible(self.session_prompt_enabled)
         layout.addWidget(self.session_prompt_section)
 
+        composer_section = QWidget()
+        composer_section_layout = QVBoxLayout(composer_section)
+        composer_section_layout.setContentsMargins(0, 0, 0, 0)
+        composer_section_layout.setSpacing(10)
+
+        composer_heading = QLabel("Composer")
+        composer_heading.setObjectName("sectionLabel")
+        composer_section_layout.addWidget(composer_heading)
+
+        composer_layout = QFormLayout()
+        composer_layout.setSpacing(12)
+        composer_layout.setLabelAlignment(Qt.AlignmentFlag.AlignLeft)
+
+        self.composer_max_lines_spin = QSpinBox()
+        self.composer_max_lines_spin.setRange(MIN_COMPOSER_MAX_LINES, MAX_COMPOSER_MAX_LINES)
+        self.composer_max_lines_spin.setSuffix(" lines")
+        self.composer_max_lines_spin.setValue(self.composer_max_lines)
+        self.composer_max_lines_spin.valueChanged.connect(self.set_composer_max_lines)
+        composer_layout.addRow("Max height", self.composer_max_lines_spin)
+        composer_section_layout.addLayout(composer_layout)
+        layout.addWidget(composer_section)
+
         thinking_row = QHBoxLayout()
         thinking_row.setSpacing(10)
 
@@ -1142,7 +1187,7 @@ class AgentChatWindow(QMainWindow):
         self.terminal_approval_banner.hide()
         canvas_layout.addWidget(self.terminal_approval_banner)
 
-        self.composer = AutoResizingTextEdit()
+        self.composer = AutoResizingTextEdit(max_lines=self.composer_max_lines)
         self.composer.send_requested.connect(self.send_message)
         self.composer.attachment_paths_pasted.connect(self.add_attachment_paths)
         self.composer.textChanged.connect(self.update_send_availability)
@@ -1232,6 +1277,16 @@ class AgentChatWindow(QMainWindow):
         self.assistant_debounce_interval_ms = self.normalize_debounce_interval(value)
         self.save_config()
         self.refresh_rendering_ui()
+
+    def set_composer_max_lines(self, value):
+        self.composer_max_lines = self.normalize_composer_max_lines(value)
+        if hasattr(self, "composer_max_lines_spin"):
+            self.composer_max_lines_spin.blockSignals(True)
+            self.composer_max_lines_spin.setValue(self.composer_max_lines)
+            self.composer_max_lines_spin.blockSignals(False)
+        if hasattr(self, "composer"):
+            self.composer.set_max_lines(self.composer_max_lines)
+        self.save_config()
 
     def refresh_rendering_ui(self):
         if hasattr(self, "debounce_checkbox"):

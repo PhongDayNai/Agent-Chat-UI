@@ -51,6 +51,7 @@
   "ui": {
     "enabled": true,
     "show_thinking": false,
-    "pin_panel": true
+    "pin_panel": true,
+    "composer_max_lines": 3
   }
 }

@@ -238,10 +238,13 @@ class AutoResizingTextEdit(QPlainTextEdit):
     send_requested = pyqtSignal()
     attachment_paths_pasted = pyqtSignal(list)
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, max_lines=3):
         super().__init__(parent)
         self._min_lines = 1
-        self._max_lines = 3
+        try:
+            self._max_lines = max(1, int(max_lines))
+        except (TypeError, ValueError):
+            self._max_lines = 3
         self._horizontal_inset = 14
         self._vertical_inset = 4
         self.setObjectName("composerInput")
@@ -258,16 +261,30 @@ class AutoResizingTextEdit(QPlainTextEdit):
             self._vertical_inset,
         )
         self.document().setDocumentMargin(0)
-        line_spacing = self.fontMetrics().lineSpacing()
-        chrome_height = (self.frameWidth() * 2) + (self._vertical_inset * 2) + 8
-        self._min_height = line_spacing * self._min_lines + chrome_height
-        self._max_height = line_spacing * self._max_lines + chrome_height
+        self.recalculate_height_bounds()
         self.textChanged.connect(self.update_height)
         self.textChanged.connect(self.keep_cursor_visible)
         self.cursorPositionChanged.connect(self.keep_cursor_visible)
         self.update_height()
 
     def keyPressEvent(self, event):
+        if (
+            event.key() in (Qt.Key.Key_Up, Qt.Key.Key_Down)
+            and not event.modifiers()
+        ):
+            previous_position = self.textCursor().position()
+            super().keyPressEvent(event)
+            cursor = self.textCursor()
+            if cursor.position() == previous_position:
+                operation = (
+                    QTextCursor.MoveOperation.StartOfLine
+                    if event.key() == Qt.Key.Key_Up
+                    else QTextCursor.MoveOperation.EndOfLine
+                )
+                cursor.movePosition(operation)
+                self.setTextCursor(cursor)
+            return
+
         if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
             if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
                 super().keyPressEvent(event)
@@ -276,6 +293,24 @@ class AutoResizingTextEdit(QPlainTextEdit):
                 self.send_requested.emit()
                 return
         super().keyPressEvent(event)
+
+    def set_max_lines(self, value):
+        try:
+            max_lines = int(value)
+        except (TypeError, ValueError):
+            max_lines = 3
+        self._max_lines = max(1, max_lines)
+        self.recalculate_height_bounds()
+        self.update_height()
+
+    def max_lines(self):
+        return self._max_lines
+
+    def recalculate_height_bounds(self):
+        line_spacing = self.fontMetrics().lineSpacing()
+        chrome_height = (self.frameWidth() * 2) + (self._vertical_inset * 2) + 8
+        self._min_height = line_spacing * self._min_lines + chrome_height
+        self._max_height = line_spacing * self._max_lines + chrome_height
 
     def canInsertFromMimeData(self, source):
         if self.extract_attachment_paths(source):
