@@ -430,6 +430,15 @@ QLabel#attachmentLabel {
     font-size: 9.5pt;
     padding: 4px 0;
 }
+QLabel#toastLabel {
+    background: #202326;
+    border: 1px solid #3a3f44;
+    border-radius: 10px;
+    color: #f4f5f6;
+    font-size: 10.5pt;
+    font-weight: 600;
+    padding: 9px 14px;
+}
 QPlainTextEdit#composerInput {
     background: transparent;
     border: none;
@@ -1346,10 +1355,17 @@ class MessageCard(QFrame):
 
     def copy_text(self):
         QGuiApplication.clipboard().setText(self.raw_text)
+        show_widget_toast(self, "Message copied")
 
     def emit_retry(self):
         if self.retry_text:
             self.retry_requested.emit(self.retry_text)
+
+
+def show_widget_toast(widget, text):
+    window = widget.window() if widget is not None else None
+    if window is not None and hasattr(window, "show_toast"):
+        window.show_toast(text)
 
 
 class AgentChatWindow(QMainWindow):
@@ -1391,6 +1407,8 @@ class AgentChatWindow(QMainWindow):
         self.sidebar_expanded_max_width = 380
         self.default_window_width = 1180
         self.default_window_height = 820
+        self.toast_label = None
+        self.toast_timer = None
 
         self.configure_responsive_metrics()
 
@@ -1537,9 +1555,44 @@ class AgentChatWindow(QMainWindow):
         content_stack.addWidget(self.composer_frame)
         root.addLayout(content_stack, 1)
 
+        self.build_toast()
         self.refresh_session_prompt_ui()
         self.update_empty_state()
         self.update_send_availability()
+
+    def build_toast(self):
+        self.toast_label = QLabel("", self)
+        self.toast_label.setObjectName("toastLabel")
+        self.toast_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.toast_label.hide()
+
+        self.toast_timer = QTimer(self)
+        self.toast_timer.setSingleShot(True)
+        self.toast_timer.setInterval(1800)
+        self.toast_timer.timeout.connect(self.hide_toast)
+
+    def show_toast(self, text):
+        if self.toast_label is None:
+            return
+        self.toast_label.setText(text)
+        self.toast_label.adjustSize()
+        self.position_toast()
+        self.toast_label.raise_()
+        self.toast_label.show()
+        if self.toast_timer is not None:
+            self.toast_timer.start()
+
+    def hide_toast(self):
+        if self.toast_label is not None:
+            self.toast_label.hide()
+
+    def position_toast(self):
+        if self.toast_label is None:
+            return
+        margin = 18
+        x = max(margin, (self.width() - self.toast_label.width()) // 2)
+        y = max(margin, self.height() - self.toast_label.height() - margin)
+        self.toast_label.move(x, y)
 
     def build_sidebar(self):
         frame = QFrame()
@@ -1944,6 +1997,7 @@ class AgentChatWindow(QMainWindow):
             self.temperature_spin.setValue(0.7)
             self.top_p_spin.setValue(0.9)
             self.top_k_spin.setValue(40)
+        self.show_toast(f"{preset.title()} preset applied")
 
     def detect_attachment_type(self, path):
         mime_type, _ = mimetypes.guess_type(path)
@@ -2134,6 +2188,7 @@ class AgentChatWindow(QMainWindow):
         super().resizeEvent(event)
         if self.sidebar_open:
             self.sync_sidebar_width(self.target_sidebar_width())
+        self.position_toast()
 
     def refresh_server_state(self):
         self.status_badge.setText("Checking OpenAI-compatible server…")
@@ -2300,6 +2355,7 @@ class AgentChatWindow(QMainWindow):
         self.refresh_base_url_history_ui()
         self.update_base_url_input_state()
         self.save_config()
+        self.show_toast("Server URL applied")
         self.refresh_server_state()
 
     def update_send_availability(self):
@@ -2460,6 +2516,7 @@ class AgentChatWindow(QMainWindow):
         self.refresh_session_prompt_ui()
         self.save_config()
         self.set_status_message("Session prompt saved to config.json.")
+        self.show_toast("Session prompt saved")
 
     def lock_session_prompt_if_needed(self):
         if self.session_prompt_locked:
