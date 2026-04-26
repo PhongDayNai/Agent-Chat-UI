@@ -2,6 +2,7 @@
 
 import re
 from html import escape
+from urllib.parse import quote
 
 try:
     from markdown_it import MarkdownIt
@@ -411,6 +412,19 @@ def render_inline_code_html(code):
     )
 
 
+def render_inline_code_link(code):
+    safe_code = escapeHtml(code) if escapeHtml is not None else escape(code, quote=False)
+    href = copy_code_href(code)
+    return (
+        f'<a href="{href}" style="'
+        "color:#ffd18a; "
+        "background-color:#15191d; "
+        "text-decoration:none; "
+        "font-family:IBM Plex Mono, Consolas, monospace;"
+        f'">{safe_code}</a>'
+    )
+
+
 def render_code_block_html(code, language=""):
     code = code.rstrip("\n")
     safe_code = escape(code, quote=False)
@@ -422,6 +436,47 @@ def render_code_block_html(code, language=""):
         "<pre>"
         f"{safe_code or '&nbsp;'}</pre>"
     )
+
+
+def copy_code_href(text):
+    return f"copy-code:{quote(text, safe='')}"
+
+
+def html_text_with_links(text):
+    text = text or ""
+    inline_code_pattern = re.compile(r"(?<!`)`([^`\n]+)`(?!`)")
+    parts = []
+    last_index = 0
+    for match in inline_code_pattern.finditer(text):
+        parts.append(html_text_segment_with_links(text[last_index:match.start()]))
+        parts.append(render_inline_code_link(match.group(1)))
+        last_index = match.end()
+    parts.append(html_text_segment_with_links(text[last_index:]))
+    return "".join(parts) or "&nbsp;"
+
+
+def html_text_segment_with_links(text, already_escaped=False):
+    parts = []
+    last_index = 0
+    for match in URL_RE.finditer(text):
+        raw_url = match.group(0)
+        url = raw_url.rstrip(TRAILING_URL_PUNCTUATION)
+        if not url:
+            continue
+        trailing = raw_url[len(url):]
+        parts.append(escape_html_text(text[last_index:match.start()], already_escaped=already_escaped))
+        safe_url = escape(url, quote=True)
+        parts.append(f'<a href="{safe_url}">{escape_html_text(url, already_escaped=already_escaped)}</a>')
+        parts.append(escape_html_text(trailing, already_escaped=already_escaped))
+        last_index = match.end()
+    parts.append(escape_html_text(text[last_index:], already_escaped=already_escaped))
+    return "".join(parts)
+
+
+def escape_html_text(text, already_escaped=False):
+    if not already_escaped:
+        text = escape(text, quote=False)
+    return text.replace("\n", "<br>")
 
 
 def linkify_markdown_urls(text):

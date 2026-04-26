@@ -41,7 +41,7 @@ from PyQt6.QtWidgets import (
 )
 
 from constants import CODE_STICKY_CONTENT_PADDING, CODE_STICKY_HEADER_HEIGHT, COPY_ICON_PATH, PIN_ICON_PATH, RETRY_ICON_PATH
-from markdown_utils import prepare_assistant_html, render_latexish_text, split_markdown_code_segments
+from markdown_utils import html_text_with_links, prepare_assistant_html, render_latexish_text, split_markdown_code_segments
 from styles import MARKDOWN_STYLESHEET
 
 class DeletableHistoryDelegate(QStyledItemDelegate):
@@ -1036,10 +1036,9 @@ class MessageCard(QFrame):
             self.loading_timer.setInterval(320)
             self.loading_timer.timeout.connect(self.advance_loading_frame)
         else:
-            self.body = QLabel()
-            self.body.setWordWrap(True)
-            self.body.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-            self.body.setStyleSheet("font-size: 11pt; line-height: 1.45; color: #e8eaed;")
+            self.body = AutoHeightTextBrowser()
+            self.body.document().setDefaultStyleSheet(MARKDOWN_STYLESHEET)
+            self.body.setMaximumHeight(16777215)
             outer_layout.addWidget(self.body)
 
         self.attachments_widget = None
@@ -1070,7 +1069,8 @@ class MessageCard(QFrame):
         if self.role == "assistant":
             self.render_assistant_content(text)
         else:
-            self.body.setText(text)
+            self.body.setHtml(html_text_with_links(text))
+            self.body.update_height()
 
     def render_assistant_content(self, text):
         if self.body_layout is None:
