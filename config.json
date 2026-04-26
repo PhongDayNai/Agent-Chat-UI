@@ -8,10 +8,8 @@
   },
   "session_prompt": {
     "enabled": true,
-    "value": "Trả lời bằng tiếng Việt",
-    "history": [
-      "Trả lời bằng tiếng Việt"
-    ]
+    "value": "",
+    "history": []
   },
   "agent_terminal": {
     "enabled": true,

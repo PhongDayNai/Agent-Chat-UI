@@ -1,5 +1,7 @@
 # Agent Chat UI
 
+Version: 1.0
+
 Agent Chat UI is a PyQt6 desktop client for local OpenAI-compatible chat
 completion servers. It is designed for running smaller local models with a
 comfortable desktop workflow, a low-friction first prompt, and optional local

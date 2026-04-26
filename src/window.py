@@ -42,6 +42,7 @@ except ImportError:
 
 from constants import (
     APP_LOGO_PATH,
+    APP_VERSION,
     APP_WORKSPACE,
     CONFIG_PATH,
     DEFAULT_SERVER_BASE_URL,
@@ -172,7 +173,7 @@ class AgentChatWindow(QMainWindow):
 
         self.configure_responsive_metrics()
 
-        self.setWindowTitle("Agent Chat")
+        self.setWindowTitle(f"Agent Chat v{APP_VERSION}")
         self.setWindowIcon(QIcon(str(APP_LOGO_PATH)))
         self.setStyleSheet(APP_STYLE)
         self.resize(self.default_window_width, self.default_window_height)
