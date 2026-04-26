@@ -165,6 +165,10 @@ def get_markdown_renderer():
         except Exception:
             pass
 
+    def render_code_inline(tokens, idx, _options, _env):
+        return render_inline_code_link(tokens[idx].content)
+
+    renderer.renderer.rules["code_inline"] = render_code_inline
     MARKDOWN_RENDERER = renderer
     return MARKDOWN_RENDERER
 
@@ -344,7 +348,7 @@ def parse_inline_markdown(text, start_index=0, end_marker=None):
         if text[index] == "`":
             closing = text.find("`", index + 1)
             if closing != -1:
-                parts.append(render_inline_code_html(text[index + 1:closing]))
+                parts.append(render_inline_code_link(text[index + 1:closing]))
                 index = closing + 1
                 continue
 
