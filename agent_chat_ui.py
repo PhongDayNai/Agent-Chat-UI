@@ -13,7 +13,7 @@ from datetime import datetime
 from pathlib import Path
 
 import requests
-from PyQt6.QtCore import QByteArray, QEasingCurve, QEvent, QPropertyAnimation, QRectF, QThread, QTimer, QUrl, Qt, pyqtSignal
+from PyQt6.QtCore import QByteArray, QBuffer, QEasingCurve, QEvent, QIODevice, QPropertyAnimation, QRectF, QThread, QTimer, QUrl, Qt, pyqtSignal
 from PyQt6.QtGui import QDesktopServices, QFont, QGuiApplication, QIcon, QImage, QPainter, QPen, QPixmap, QTextOption, QTransform
 from PyQt6.QtSvg import QSvgRenderer
 from PyQt6.QtWidgets import (
@@ -42,6 +42,11 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+try:
+    from pypdf import PdfReader
+except ImportError:
+    PdfReader = None
 
 APP_STYLE = """
 QMainWindow {
@@ -551,6 +556,7 @@ TEXT_PREVIEW_SUFFIXES = {
     ".sh", ".bash", ".zsh", ".bat", ".ps1", ".java", ".c", ".cpp", ".h", ".hpp",
     ".sql", ".toml", ".rs",
 }
+MAX_ATTACHMENT_TEXT_CHARS = 12000
 
 
 class DeletableHistoryDelegate(QStyledItemDelegate):
@@ -2232,6 +2238,72 @@ class AgentChatWindow(QMainWindow):
         with open(path, "rb") as handle:
             return base64.b64encode(handle.read()).decode("utf-8")
 
+    def image_data_url_for_prompt(self, path):
+        suffix = Path(path).suffix.lower()
+        mime_type = mimetypes.guess_type(path)[0] or "image/png"
+
+        if suffix in {".png", ".jpg", ".jpeg"}:
+            encoded = self.encode_attachment(path)
+            return f"data:{mime_type};base64,{encoded}"
+
+        image = QImage(path)
+        if image.isNull():
+            raise ValueError(f"Unable to decode image file: {Path(path).name}")
+
+        buffer = QBuffer()
+        buffer.open(QIODevice.OpenModeFlag.WriteOnly)
+        if not image.save(buffer, "PNG"):
+            buffer.close()
+            raise ValueError(f"Unable to convert image file to PNG: {Path(path).name}")
+
+        encoded = base64.b64encode(bytes(buffer.data())).decode("utf-8")
+        buffer.close()
+        return f"data:image/png;base64,{encoded}"
+
+    def read_text_attachment(self, path):
+        try:
+            content = Path(path).read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            content = Path(path).read_text(encoding="utf-8", errors="replace")
+        return content
+
+    def read_pdf_attachment(self, path):
+        if PdfReader is None:
+            return (
+                "PDF extraction is unavailable because the optional dependency "
+                "`pypdf` is not installed."
+            )
+        reader = PdfReader(path)
+        parts = []
+        for page_number, page in enumerate(reader.pages, start=1):
+            text = page.extract_text() or ""
+            text = text.strip()
+            if text:
+                parts.append(f"[Page {page_number}]\n{text}")
+            if sum(len(part) for part in parts) >= MAX_ATTACHMENT_TEXT_CHARS:
+                break
+        if not parts:
+            return "No extractable text was found in this PDF."
+        return "\n\n".join(parts)
+
+    def attachment_text_for_prompt(self, attachment):
+        path = attachment["path"]
+        suffix = Path(path).suffix.lower()
+        try:
+            if suffix == ".pdf":
+                content = self.read_pdf_attachment(path)
+            elif self.is_text_preview_file(path):
+                content = self.read_text_attachment(path)
+            else:
+                return ""
+        except Exception as exc:
+            return f"Unable to read file content: {exc}"
+
+        content = content.strip()
+        if len(content) > MAX_ATTACHMENT_TEXT_CHARS:
+            content = content[:MAX_ATTACHMENT_TEXT_CHARS] + "\n\n[Truncated]"
+        return content
+
     def sidebar_enter_event(self, event):
         self.sidebar_hover_timer.start()
         event.accept()
@@ -2732,21 +2804,29 @@ class AgentChatWindow(QMainWindow):
 
         prompt = user_text or "Describe the attached inputs."
         content = [{"type": "text", "text": prompt}]
-        file_names = []
+        attachment_sections = []
         for item in attachments:
             if item["type"] == "image":
-                mime_type = mimetypes.guess_type(item["path"])[0] or "image/png"
-                encoded = self.encode_attachment(item["path"])
                 content.append(
                     {
                         "type": "image_url",
-                        "image_url": {"url": f"data:{mime_type};base64,{encoded}"},
+                        "image_url": {"url": self.image_data_url_for_prompt(item["path"])},
                     }
                 )
             else:
-                file_names.append(item["name"])
-        if file_names:
-            content[0]["text"] = f"{content[0]['text']}\n\nAttached files: {', '.join(file_names)}"
+                extracted = self.attachment_text_for_prompt(item)
+                if extracted:
+                    attachment_sections.append(
+                        f"File: {item['name']}\n```text\n{extracted}\n```"
+                    )
+                else:
+                    attachment_sections.append(
+                        f"File attached: {item['name']} (binary or unsupported for inline extraction)."
+                    )
+        if attachment_sections:
+            content[0]["text"] = (
+                f"{content[0]['text']}\n\nAttached file contents:\n\n" + "\n\n".join(attachment_sections)
+            )
         return {"role": "user", "content": content}
 
     def build_messages_payload(self, user_message):
