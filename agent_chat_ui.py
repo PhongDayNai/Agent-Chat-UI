@@ -513,6 +513,8 @@ a {
 DEFAULT_SERVER_BASE_URL = "http://localhost:8080"
 CONFIG_PATH = Path(__file__).with_name("config.json")
 PIN_ICON_PATH = Path(__file__).with_name("assets") / "ic_pin.svg"
+ARROW_UP_ICON_PATH = Path(__file__).with_name("assets") / "ic_arrow_up.svg"
+STOP_ICON_PATH = Path(__file__).with_name("assets") / "ic_stop.svg"
 CLIPBOARD_IMAGE_DIR = Path(tempfile.gettempdir()) / "agent_chat_ui_clipboard"
 
 
@@ -633,6 +635,40 @@ class PinIconButton(QPushButton):
         svg = self._svg_template.replace("currentColor", color)
         renderer = QSvgRenderer(QByteArray(svg.encode("utf-8")))
         target = QRectF(self.rect().adjusted(11, 11, -11, -11))
+        renderer.render(painter, target)
+
+
+class SvgActionButton(QPushButton):
+    def __init__(self, icon_path=None, parent=None):
+        super().__init__(parent)
+        self.setText("")
+        self._svg_template = ""
+        self.set_icon_path(icon_path)
+
+    def set_icon_path(self, icon_path):
+        try:
+            content = Path(icon_path).read_text(encoding="utf-8") if icon_path else ""
+        except OSError:
+            content = ""
+        self._svg_template = (
+            content
+            .replace("#000000", "currentColor")
+            .replace("#000", "currentColor")
+            .replace("#1C274C", "currentColor")
+            .replace("#292D32", "currentColor")
+        )
+        self.update()
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        if not self._svg_template:
+            return
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        color = self.palette().buttonText().color().name()
+        svg = self._svg_template.replace("currentColor", color)
+        renderer = QSvgRenderer(QByteArray(svg.encode("utf-8")))
+        target = QRectF(self.rect().adjusted(8, 8, -8, -8))
         renderer.render(painter, target)
 
 
@@ -1860,21 +1896,12 @@ class AgentChatWindow(QMainWindow):
         self.clear_attachments_button.hide()
         footer_row.addWidget(self.clear_attachments_button)
 
-        self.stop_button = QPushButton("■")
-        self.stop_button.setObjectName("iconActionButton")
-        self.stop_button.setProperty("variant", "stop")
-        self.stop_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.stop_button.setToolTip("Stop")
-        self.stop_button.clicked.connect(self.stop_generation)
-        self.stop_button.hide()
-        footer_row.addWidget(self.stop_button)
-
-        self.send_button = QPushButton("↑")
+        self.send_button = SvgActionButton(ARROW_UP_ICON_PATH)
         self.send_button.setObjectName("iconActionButton")
         self.send_button.setProperty("variant", "send")
         self.send_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.send_button.setToolTip("Send")
-        self.send_button.clicked.connect(self.send_message)
+        self.send_button.clicked.connect(self.handle_send_action_button)
         footer_row.addWidget(self.send_button)
 
         canvas_layout.addLayout(footer_row)
@@ -2256,13 +2283,32 @@ class AgentChatWindow(QMainWindow):
         has_text = bool(self.composer.toPlainText().strip()) or bool(self.pending_attachments)
         has_model = bool(self.available_models) and bool(self.model_selector.currentText().strip())
         busy = self.worker is not None and self.worker.isRunning()
-        can_send = has_text and has_model
-        self.send_button.setEnabled(has_text)
-        self.stop_button.setVisible(busy)
+        if has_text:
+            self.configure_send_action_button("send", enabled=has_model)
+        elif busy:
+            self.configure_send_action_button("stop", enabled=True)
+        else:
+            self.configure_send_action_button("send", enabled=False)
         self.model_selector.setEnabled(bool(self.available_models) and not busy)
         self.attach_button.setEnabled(True)
         self.clear_attachments_button.setEnabled(bool(self.pending_attachments))
         self.refresh_queue_ui()
+
+    def configure_send_action_button(self, mode, enabled):
+        icon_path = STOP_ICON_PATH if mode == "stop" else ARROW_UP_ICON_PATH
+        tooltip = "Stop" if mode == "stop" else "Send"
+        self.send_button.setProperty("variant", mode)
+        self.send_button.setToolTip(tooltip)
+        self.send_button.setEnabled(enabled)
+        self.send_button.set_icon_path(icon_path)
+        self.send_button.style().unpolish(self.send_button)
+        self.send_button.style().polish(self.send_button)
+
+    def handle_send_action_button(self):
+        if self.send_button.property("variant") == "stop":
+            self.stop_generation()
+            return
+        self.send_message()
 
     def refresh_queue_ui(self):
         count = len(self.message_queue)
