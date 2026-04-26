@@ -30,7 +30,7 @@ python agent_chat_ui.py
 
 ```text
 agent_chat_ui.py      # thin launcher
-src/    # application package
+src/                 # application modules
 assets/               # SVG icons
 config.json           # local default config
 ```
