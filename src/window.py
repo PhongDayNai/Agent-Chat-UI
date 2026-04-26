@@ -38,6 +38,7 @@ except ImportError:
     PdfReader = None
 
 from constants import (
+    AGENT_TERMINAL_PROMPT,
     CONFIG_PATH,
     DEFAULT_SERVER_BASE_URL,
     MAX_ATTACHMENT_TEXT_CHARS,
@@ -97,6 +98,7 @@ class AgentChatWindow(QMainWindow):
                 self.session_prompt_history,
                 self.initial_session_prompt,
             )
+        self.agent_terminal_enabled = bool(self.config.get("agent_terminal_enabled", False))
         self.advanced_expanded = False
         self.sidebar_pinned = False
         self.sidebar_open = False
@@ -126,6 +128,7 @@ class AgentChatWindow(QMainWindow):
             "base_urls": [DEFAULT_SERVER_BASE_URL],
             "session_prompt": "",
             "session_prompts": [],
+            "agent_terminal_enabled": False,
             "temperature": 0.7,
             "top_p": 0.9,
             "top_k": 40,
@@ -147,6 +150,7 @@ class AgentChatWindow(QMainWindow):
             "base_urls": self.base_url_history,
             "session_prompt": self.current_session_prompt_value(),
             "session_prompts": self.session_prompt_history,
+            "agent_terminal_enabled": self.agent_terminal_enabled,
             "temperature": self.temperature_spin.value() if hasattr(self, "temperature_spin") else 0.7,
             "top_p": self.top_p_spin.value() if hasattr(self, "top_p_spin") else 0.9,
             "top_k": self.top_k_spin.value() if hasattr(self, "top_k_spin") else 40,
@@ -515,6 +519,20 @@ class AgentChatWindow(QMainWindow):
         thinking_row.addStretch()
         layout.addLayout(thinking_row)
 
+        terminal_row = QHBoxLayout()
+        terminal_row.setSpacing(10)
+
+        terminal_label = QLabel("Agent")
+        terminal_label.setObjectName("sectionLabel")
+        terminal_row.addWidget(terminal_label)
+
+        self.agent_terminal_checkbox = QCheckBox("Terminal access")
+        self.agent_terminal_checkbox.setChecked(self.agent_terminal_enabled)
+        self.agent_terminal_checkbox.toggled.connect(self.set_agent_terminal_enabled)
+        terminal_row.addWidget(self.agent_terminal_checkbox)
+        terminal_row.addStretch()
+        layout.addLayout(terminal_row)
+
         preset_row = QHBoxLayout()
         preset_row.setSpacing(10)
         preset_label = QLabel("Presets")
@@ -701,6 +719,15 @@ class AgentChatWindow(QMainWindow):
             self.top_p_spin.setValue(0.9)
             self.top_k_spin.setValue(40)
         self.show_toast(f"{preset.title()} preset applied")
+
+    def set_agent_terminal_enabled(self, enabled):
+        self.agent_terminal_enabled = bool(enabled)
+        self.save_config()
+        self.set_status_message(
+            "Terminal agent enabled. Commands run in the app workspace."
+            if self.agent_terminal_enabled
+            else "Terminal agent disabled."
+        )
 
     def detect_attachment_type(self, path):
         mime_type, _ = mimetypes.guess_type(path)
@@ -1401,6 +1428,7 @@ class AgentChatWindow(QMainWindow):
             temperature=self.temperature_spin.value(),
             top_p=self.top_p_spin.value(),
             top_k=self.top_k_spin.value(),
+            agent_terminal_enabled=self.agent_terminal_enabled,
         )
         self.worker.token_received.connect(self.on_token_received)
         self.worker.thinking_received.connect(self.on_thinking_received)
@@ -1557,6 +1585,8 @@ class AgentChatWindow(QMainWindow):
         messages = []
         if self.session_system_prompt:
             messages.append({"role": "system", "content": self.session_system_prompt})
+        if self.agent_terminal_enabled:
+            messages.append({"role": "system", "content": AGENT_TERMINAL_PROMPT})
         messages.extend(self.history)
         messages.append(user_message)
         return messages
