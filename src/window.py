@@ -129,7 +129,7 @@ class AgentChatWindow(QMainWindow):
             "base_urls": [DEFAULT_SERVER_BASE_URL],
             "session_prompt": "",
             "session_prompts": [],
-            "agent_terminal_enabled": False,
+            "agent_terminal_enabled": True,
             "temperature": 0.7,
             "top_p": 0.9,
             "top_k": 40,

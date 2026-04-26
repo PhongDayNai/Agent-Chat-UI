@@ -48,6 +48,7 @@ command here
 </terminal_command>
 
 Rules:
+- If the user explicitly asks you to run, execute, check, inspect with, or show the output of a terminal command, request that command with a terminal_command tag instead of saying you cannot run commands.
 - Run commands only when they are useful for the user's request.
 - The command runs with bash in this workspace: {APP_WORKSPACE}
 - After terminal output is returned, continue from the result.
