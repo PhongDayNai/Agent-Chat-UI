@@ -544,9 +544,13 @@ class ChatCompletionWorker(QThread):
         except ET.ParseError:
             return []
         messages = []
-        for obj in root.findall(".//{*}Obj"):
+        for obj in list(root):
+            if not obj.tag.endswith("}Obj") and obj.tag != "Obj":
+                continue
             stream_name = (obj.attrib.get("S") or "").lower()
             if stream_name in {"progress", "information"}:
+                continue
+            if not stream_name:
                 continue
             message = self.windows_clixml_object_text(obj)
             if message:
