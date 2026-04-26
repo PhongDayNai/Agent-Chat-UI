@@ -8,7 +8,7 @@ from io import BytesIO
 from pathlib import Path
 
 import requests
-from PyQt6.QtCore import QBuffer, QEasingCurve, QEvent, QIODevice, QPropertyAnimation, QTimer, QUrl, Qt
+from PyQt6.QtCore import QBuffer, QEasingCurve, QEvent, QIODevice, QPoint, QPropertyAnimation, QTimer, QUrl, Qt
 from PyQt6.QtGui import QDesktopServices, QGuiApplication, QImage
 from PyQt6.QtWidgets import (
     QApplication,
@@ -59,6 +59,8 @@ from widgets import (
     ImageGalleryDialog,
     MessageCard,
     PinIconButton,
+    AssistantCodeBlock,
+    StickyCodeHeader,
     SvgActionButton,
 )
 from constants import ARROW_UP_ICON_PATH, STOP_ICON_PATH
@@ -103,6 +105,7 @@ class AgentChatWindow(QMainWindow):
         self.sidebar_expanded_max_width = 380
         self.default_window_width = 1180
         self.default_window_height = 820
+        self.sticky_code_header = None
         self.toast_label = None
         self.toast_timer = None
 
@@ -221,7 +224,10 @@ class AgentChatWindow(QMainWindow):
         self.scroll_area.setWidgetResizable(True)
         self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.scroll_area.setMinimumWidth(0)
+        self.scroll_area.viewport().installEventFilter(self)
+        self.scroll_area.verticalScrollBar().installEventFilter(self)
         content_layout.addWidget(self.scroll_area)
+        self.scroll_area.verticalScrollBar().valueChanged.connect(self.update_sticky_code_header)
 
         self.chat_surface = QWidget()
         self.chat_layout = QVBoxLayout(self.chat_surface)
@@ -240,6 +246,7 @@ class AgentChatWindow(QMainWindow):
         self.chat_layout.addStretch()
 
         self.scroll_area.setWidget(self.chat_surface)
+        self.sticky_code_header = StickyCodeHeader(self.scroll_area.viewport())
 
         self.composer_frame = self.build_composer()
         self.composer_frame.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
@@ -1086,6 +1093,7 @@ class AgentChatWindow(QMainWindow):
         super().resizeEvent(event)
         if self.sidebar_open:
             self.sync_sidebar_width(self.target_sidebar_width())
+        self.update_sticky_code_header()
         self.position_toast()
 
     def refresh_server_state(self):
@@ -1675,6 +1683,47 @@ class AgentChatWindow(QMainWindow):
     def update_empty_state(self):
         self.empty_state.setVisible(self.messages_layout.count() == 0)
 
+    def update_sticky_code_header(self, *_args):
+        if self.sticky_code_header is None or not hasattr(self, "scroll_area"):
+            return
+
+        active_block = None
+        active_geometry = None
+        viewport = self.scroll_area.viewport()
+        header_height = self.sticky_code_header.height()
+
+        for code_block in self.messages_container.findChildren(AssistantCodeBlock):
+            top_left = code_block.mapTo(viewport, QPoint(0, 0))
+            top = top_left.y()
+            bottom = top + code_block.height()
+            if top <= 0 and bottom > header_height:
+                active_block = code_block
+                active_geometry = (
+                    max(0, top_left.x()),
+                    0,
+                    min(code_block.width(), viewport.width() - max(0, top_left.x())),
+                    header_height,
+                )
+                break
+
+        if active_block is None or active_geometry is None or active_geometry[2] <= 0:
+            self.sticky_code_header.hide()
+            self.sticky_code_header.set_code_block(None)
+            return
+
+        self.sticky_code_header.set_code_block(active_block)
+        self.sticky_code_header.setGeometry(*active_geometry)
+        self.sticky_code_header.raise_()
+        self.sticky_code_header.show()
+
+    def eventFilter(self, watched, event):
+        if watched == self.scroll_area.viewport() and event.type() in (
+            QEvent.Type.Resize,
+            QEvent.Type.Show,
+        ):
+            QTimer.singleShot(0, self.update_sticky_code_header)
+        return super().eventFilter(watched, event)
+
     def scroll_to_bottom(self):
         QTimer.singleShot(
             0,
@@ -1703,6 +1752,9 @@ class AgentChatWindow(QMainWindow):
         self.clear_attachments()
         self.status_badge.setText("Ready")
         self.status_detail.setText("New session started.")
+        if self.sticky_code_header is not None:
+            self.sticky_code_header.hide()
+            self.sticky_code_header.set_code_block(None)
         self.refresh_session_prompt_ui()
         self.refresh_queue_ui()
         self.update_empty_state()

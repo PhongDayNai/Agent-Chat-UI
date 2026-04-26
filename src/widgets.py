@@ -38,11 +38,9 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from constants import COPY_ICON_PATH, PIN_ICON_PATH, RETRY_ICON_PATH
+from constants import CODE_STICKY_CONTENT_PADDING, CODE_STICKY_HEADER_HEIGHT, COPY_ICON_PATH, PIN_ICON_PATH, RETRY_ICON_PATH
 from markdown_utils import prepare_assistant_html, render_latexish_text, split_markdown_code_segments
 from styles import MARKDOWN_STYLESHEET
-
-ASSISTANT_CODE_CONTENT_PADDING = 12
 
 class DeletableHistoryDelegate(QStyledItemDelegate):
     def __init__(self, parent=None):
@@ -809,7 +807,7 @@ class AssistantCodeBlock(QFrame):
         copy_button.clicked.connect(self.copy_code)
         header.addWidget(copy_button, 0, Qt.AlignmentFlag.AlignTop)
         layout.addLayout(header)
-        layout.addSpacing(ASSISTANT_CODE_CONTENT_PADDING)
+        layout.addSpacing(CODE_STICKY_CONTENT_PADDING)
 
         self.editor = AssistantCodeTextEdit()
         self.editor.setObjectName("assistantCodeText")
@@ -889,6 +887,46 @@ class AssistantCodeBlock(QFrame):
             "sql": "SQL",
         }
         return aliases.get(normalized.lower(), normalized[:1].upper() + normalized[1:])
+
+
+class StickyCodeHeader(QFrame):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.code_block = None
+        self.setObjectName("stickyCodeHeader")
+        self.setFixedHeight(CODE_STICKY_HEADER_HEIGHT)
+        self.hide()
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(20, 8, 20, 8)
+        layout.setSpacing(8)
+
+        icon = QLabel("</>")
+        icon.setObjectName("assistantCodeIcon")
+        layout.addWidget(icon, 0, Qt.AlignmentFlag.AlignVCenter)
+
+        self.language_label = QLabel("Code")
+        self.language_label.setObjectName("assistantCodeLanguage")
+        layout.addWidget(self.language_label, 0, Qt.AlignmentFlag.AlignVCenter)
+        layout.addStretch()
+
+        self.copy_button = SvgActionButton(COPY_ICON_PATH)
+        self.copy_button.setObjectName("assistantCodeCopyButton")
+        self.copy_button.setToolTip("Copy code")
+        self.copy_button.clicked.connect(self.copy_code)
+        layout.addWidget(self.copy_button, 0, Qt.AlignmentFlag.AlignVCenter)
+
+    def set_code_block(self, code_block):
+        self.code_block = code_block
+        self.language_label.setText(code_block.language if code_block is not None else "Code")
+
+    def copy_code(self):
+        if self.code_block is not None:
+            QGuiApplication.clipboard().setText(self.code_block.code)
+            show_widget_toast(self, "Code copied")
+
+    def wheelEvent(self, event):
+        event.ignore()
 
 class MessageCard(QFrame):
     retry_requested = pyqtSignal(str)
@@ -1026,6 +1064,9 @@ class MessageCard(QFrame):
             if widget is not None:
                 widget.deleteLater()
         self.body.updateGeometry()
+        window = self.window()
+        if hasattr(window, "update_sticky_code_header"):
+            QTimer.singleShot(0, window.update_sticky_code_header)
 
     def assistant_segments(self, text):
         segments = []

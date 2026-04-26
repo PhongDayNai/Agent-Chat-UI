@@ -392,6 +392,15 @@ QFrame#assistantCodeBlock {
     border: 1px solid #2a2d30;
     border-radius: 18px;
 }
+QFrame#stickyCodeHeader {
+    background: #151617;
+    border: 1px solid #2a2d30;
+    border-bottom-color: #25282c;
+    border-top-left-radius: 18px;
+    border-top-right-radius: 18px;
+    border-bottom-left-radius: 0;
+    border-bottom-right-radius: 0;
+}
 QLabel#assistantCodeIcon,
 QLabel#assistantCodeLanguage {
     color: #f2f3f5;
