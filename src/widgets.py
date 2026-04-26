@@ -26,6 +26,7 @@ from PyQt6.QtWidgets import (
 )
 
 from constants import COPY_ICON_PATH, PIN_ICON_PATH, RETRY_ICON_PATH
+from markdown_utils import prepare_assistant_html
 from styles import MARKDOWN_STYLESHEET
 
 class DeletableHistoryDelegate(QStyledItemDelegate):
@@ -761,10 +762,7 @@ class MessageCard(QFrame):
     def update_text(self, text):
         self.raw_text = text
         if self.role == "assistant":
-            try:
-                self.body.setMarkdown(text or "…")
-            except Exception:
-                self.body.setPlainText(text or "…")
+            self.body.setHtml(prepare_assistant_html(text))
             self.body.update_height()
         else:
             self.body.setText(text)
@@ -813,10 +811,7 @@ class MessageCard(QFrame):
         self.thinking_label.setVisible(visible and has_thinking)
         self.thinking_body.setVisible(visible and has_thinking)
         if visible and has_thinking:
-            try:
-                self.thinking_body.setMarkdown(self.thinking_text)
-            except Exception:
-                self.thinking_body.setPlainText(self.thinking_text)
+            self.thinking_body.setHtml(prepare_assistant_html(self.thinking_text))
             self.thinking_body.update_height()
 
     def set_thinking_visibility(self, visible):
