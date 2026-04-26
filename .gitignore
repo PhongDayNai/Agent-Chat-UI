@@ -6,9 +6,9 @@ __pycache__/
 *.pyd
 .DS_Store
 agent_chat_ui_clipboard/
-build/
-dist/
-packaging/
+/build/
+/dist/
+/packaging/
 *.spec
 *.deb
 *.AppImage
