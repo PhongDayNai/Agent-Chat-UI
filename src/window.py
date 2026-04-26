@@ -51,6 +51,7 @@ from constants import (
     URL_RE,
 )
 from html_utils import HtmlTextExtractor
+from markdown_utils import normalize_terminal_fences, replace_terminal_command_tags
 from styles import APP_STYLE
 from widgets import (
     AttachmentChip,
@@ -1665,7 +1666,10 @@ class AgentChatWindow(QMainWindow):
             self.current_assistant_card.stop_loading()
         if success and self.pending_user_message and full_response.strip():
             self.history.append(self.pending_user_message)
-            self.history.append({"role": "assistant", "content": full_response})
+            clean_response = normalize_terminal_fences(
+                replace_terminal_command_tags(full_response)
+            ).strip()
+            self.history.append({"role": "assistant", "content": clean_response or full_response})
             self.status_badge.setText("Ready")
             self.status_detail.setText("Response completed.")
         elif stopped:

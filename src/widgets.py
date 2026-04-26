@@ -49,7 +49,15 @@ from constants import (
     PIN_ICON_PATH,
     RETRY_ICON_PATH,
 )
-from markdown_utils import html_text_with_links, prepare_assistant_html, render_latexish_text, split_markdown_code_segments
+from markdown_utils import (
+    html_text_with_links,
+    normalize_terminal_fences,
+    prepare_assistant_html,
+    render_latexish_text,
+    replace_terminal_command_tags,
+    split_assistant_terminal_text,
+    split_markdown_code_segments,
+)
 from styles import MARKDOWN_STYLESHEET
 
 class DeletableHistoryDelegate(QStyledItemDelegate):
@@ -1158,6 +1166,8 @@ class MessageCard(QFrame):
         self.terminal_blocks_widget = None
         self.terminal_blocks_layout = None
         self.current_terminal_block = None
+        self.post_body = None
+        self.post_body_layout = None
 
         self.setObjectName("messageCard")
         self.setProperty("user", role == "user")
@@ -1225,6 +1235,13 @@ class MessageCard(QFrame):
             self.terminal_blocks_widget.hide()
             outer_layout.addWidget(self.terminal_blocks_widget)
 
+            self.post_body = QWidget()
+            self.post_body_layout = QVBoxLayout(self.post_body)
+            self.post_body_layout.setContentsMargins(0, 0, 0, 0)
+            self.post_body_layout.setSpacing(10)
+            self.post_body.hide()
+            outer_layout.addWidget(self.post_body)
+
             self.loading_timer = QTimer(self)
             self.loading_timer.setInterval(320)
             self.loading_timer.timeout.connect(self.advance_loading_frame)
@@ -1260,40 +1277,55 @@ class MessageCard(QFrame):
     def update_text(self, text):
         self.raw_text = text
         if self.role == "assistant":
-            self.render_assistant_content(text)
+            self.render_assistant_message_text(text)
         else:
             self.body.setHtml(html_text_with_links(text))
             self.body.update_height()
 
-    def render_assistant_content(self, text):
-        if self.body_layout is None:
+    def render_assistant_message_text(self, text):
+        main_text, post_text = split_assistant_terminal_text(text)
+        self.render_assistant_content(self.body_layout, main_text)
+        if self.post_body is not None and self.post_body_layout is not None:
+            has_post_text = bool(post_text.strip())
+            self.post_body.setVisible(has_post_text)
+            if has_post_text:
+                self.render_assistant_content(self.post_body_layout, post_text)
+            else:
+                self.clear_layout(self.post_body_layout)
+
+    def render_assistant_content(self, layout, text):
+        if layout is None:
             return
         segments = self.assistant_segments(text)
         for index, segment in enumerate(segments):
-            widget = self.body_layout.itemAt(index).widget() if index < self.body_layout.count() else None
+            widget = layout.itemAt(index).widget() if index < layout.count() else None
             if not self.can_reuse_segment_widget(widget, segment):
                 if widget is not None:
-                    item = self.body_layout.takeAt(index)
+                    item = layout.takeAt(index)
                     old_widget = item.widget()
                     if old_widget is not None:
                         old_widget.deleteLater()
                 widget = self.create_segment_widget(segment)
-                self.body_layout.insertWidget(index, widget)
+                layout.insertWidget(index, widget)
             self.update_segment_widget(widget, segment)
 
-        while self.body_layout.count() > len(segments):
-            item = self.body_layout.takeAt(self.body_layout.count() - 1)
+        while layout.count() > len(segments):
+            item = layout.takeAt(layout.count() - 1)
             widget = item.widget()
             if widget is not None:
                 widget.deleteLater()
-        self.body.updateGeometry()
+        parent_widget = layout.parentWidget()
+        if parent_widget is not None:
+            parent_widget.updateGeometry()
         window = self.window()
         if hasattr(window, "update_sticky_code_header"):
             QTimer.singleShot(0, window.update_sticky_code_header)
 
     def assistant_segments(self, text):
+        normalized_text = replace_terminal_command_tags(text or "...")
+        normalized_text = normalize_terminal_fences(normalized_text)
         segments = []
-        for segment_type, content, language in split_markdown_code_segments(text or "..."):
+        for segment_type, content, language in split_markdown_code_segments(normalized_text):
             if segment_type == "code":
                 segments.append({"type": "code", "content": content, "language": language})
             elif content.strip():
@@ -1330,6 +1362,16 @@ class MessageCard(QFrame):
                 widget.update_height()
         widget.setProperty("segmentContent", segment["content"])
         widget.setProperty("segmentLanguage", segment["language"])
+
+    def clear_layout(self, layout):
+        while layout.count():
+            item = layout.takeAt(0)
+            widget = item.widget()
+            child_layout = item.layout()
+            if widget is not None:
+                widget.deleteLater()
+            elif child_layout is not None:
+                self.clear_layout(child_layout)
 
     def refresh_attachments(self):
         if self.role != "user" or self.attachments_layout is None:
@@ -1426,7 +1468,7 @@ class MessageCard(QFrame):
 
     def update_loading_text(self):
         dots = "." * (self.loading_step + 1)
-        self.render_assistant_content(dots)
+        self.render_assistant_content(self.body_layout, dots)
 
     def copy_text(self):
         QGuiApplication.clipboard().setText(self.raw_text)

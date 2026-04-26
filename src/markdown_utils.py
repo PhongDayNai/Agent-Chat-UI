@@ -17,6 +17,7 @@ except ImportError:
     tasklists_plugin = None
 
 from constants import TRAILING_URL_PUNCTUATION, URL_RE
+from constants import TERMINAL_COMMAND_RE
 
 LATEX_COMMAND_REPLACEMENTS = {
     r"\leq": "<=",
@@ -481,6 +482,39 @@ def escape_html_text(text, already_escaped=False):
     if not already_escaped:
         text = escape(text, quote=False)
     return text.replace("\n", "<br>")
+
+
+def replace_terminal_command_tags(text):
+    text = re.sub(
+        r"<terminal_command>\s*([\s\S]*?)\s*</terminal_command>",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    )
+    return re.sub(r"<terminal_command>[\s\S]*$", "", text, flags=re.IGNORECASE)
+
+
+def normalize_terminal_fences(text):
+    text = re.sub(
+        r"```terminal\s*\n([\s\S]*?)```",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    )
+    return re.sub(r"```terminal[\s\S]*$", "", text, flags=re.IGNORECASE)
+
+
+def split_assistant_terminal_text(text):
+    text = text or "..."
+    matches = list(TERMINAL_COMMAND_RE.finditer(text))
+    if not matches:
+        return text, ""
+
+    first = matches[0]
+    last = matches[-1]
+    before = text[:first.start()]
+    after = text[last.end():]
+    return before, after
 
 
 def linkify_markdown_urls(text):
