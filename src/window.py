@@ -3,6 +3,7 @@
 import base64
 import json
 import mimetypes
+from datetime import datetime
 from io import BytesIO
 from pathlib import Path
 
@@ -22,6 +23,7 @@ from PyQt6.QtWidgets import (
     QLineEdit,
     QMainWindow,
     QMenu,
+    QPlainTextEdit,
     QPushButton,
     QScrollArea,
     QSizePolicy,
