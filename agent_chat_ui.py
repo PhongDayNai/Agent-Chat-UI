@@ -13,8 +13,8 @@ from datetime import datetime
 from pathlib import Path
 
 import requests
-from PyQt6.QtCore import QByteArray, QEasingCurve, QEvent, QPropertyAnimation, QRectF, QThread, QTimer, Qt, pyqtSignal
-from PyQt6.QtGui import QFont, QGuiApplication, QIcon, QImage, QPainter, QPen, QPixmap, QTextOption, QTransform
+from PyQt6.QtCore import QByteArray, QEasingCurve, QEvent, QPropertyAnimation, QRectF, QThread, QTimer, QUrl, Qt, pyqtSignal
+from PyQt6.QtGui import QDesktopServices, QFont, QGuiApplication, QIcon, QImage, QPainter, QPen, QPixmap, QTextOption, QTransform
 from PyQt6.QtSvg import QSvgRenderer
 from PyQt6.QtWidgets import (
     QApplication,
@@ -545,6 +545,12 @@ STOP_ICON_PATH = Path(__file__).with_name("assets") / "ic_stop.svg"
 COPY_ICON_PATH = Path(__file__).with_name("assets") / "ic_copy.svg"
 RETRY_ICON_PATH = Path(__file__).with_name("assets") / "ic_retry.svg"
 CLIPBOARD_IMAGE_DIR = Path(tempfile.gettempdir()) / "agent_chat_ui_clipboard"
+TEXT_PREVIEW_SUFFIXES = {
+    ".txt", ".md", ".json", ".csv", ".py", ".kt", ".js", ".ts", ".tsx", ".jsx",
+    ".html", ".css", ".xml", ".yaml", ".yml", ".ini", ".cfg", ".conf", ".log",
+    ".sh", ".bash", ".zsh", ".bat", ".ps1", ".java", ".c", ".cpp", ".h", ".hpp",
+    ".sql", ".toml", ".rs",
+}
 
 
 class DeletableHistoryDelegate(QStyledItemDelegate):
@@ -924,11 +930,13 @@ class AttachmentChip(QFrame):
     remove_requested = pyqtSignal(str)
     preview_requested = pyqtSignal(str)
 
-    def __init__(self, attachment, parent=None):
+    def __init__(self, attachment, removable=True, parent=None):
         super().__init__(parent)
         self.attachment = attachment
+        self.removable = removable
         self.preview = None
         self.remove_button = None
+        self.name_label = None
         self.setObjectName("attachmentChip")
 
         if attachment["type"] == "image":
@@ -941,30 +949,85 @@ class AttachmentChip(QFrame):
             self.remove_button.setObjectName("attachmentRemoveButton")
             self.remove_button.setFixedSize(24, 24)
             self.remove_button.clicked.connect(lambda: self.remove_requested.emit(self.attachment["path"]))
+            self.remove_button.setVisible(removable)
             self.setToolTip(attachment["name"])
         else:
             self.setMinimumWidth(180)
+            self.setMaximumWidth(280)
+            self.setFixedHeight(46)
             layout = QHBoxLayout(self)
-            layout.setContentsMargins(12, 10, 12, 10)
-            layout.setSpacing(10)
+            layout.setContentsMargins(10, 4, 10, 4)
+            layout.setSpacing(16)
 
-            icon = QLabel("FILE")
+            icon = QLabel(self.file_glyph())
             icon.setObjectName("fileGlyph")
+            icon.setFixedWidth(28)
             layout.addWidget(icon)
 
-            name = QLabel(attachment["name"])
-            name.setObjectName("attachmentName")
-            name.setWordWrap(True)
-            layout.addWidget(name, 1)
+            self.name_label = QLabel()
+            self.name_label.setObjectName("attachmentName")
+            self.name_label.setWordWrap(False)
+            self.name_label.setFixedHeight(18)
+            self.name_label.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
+            self.name_label.setMinimumWidth(0)
+            layout.addWidget(self.name_label, 1)
 
-            remove_button = QPushButton("×")
-            remove_button.setObjectName("attachmentRemoveButton")
-            remove_button.clicked.connect(lambda: self.remove_requested.emit(self.attachment["path"]))
-            layout.addWidget(remove_button)
+            if removable:
+                remove_button = QPushButton("×")
+                remove_button.setObjectName("attachmentRemoveButton")
+                remove_button.setFixedSize(20, 20)
+                remove_button.clicked.connect(lambda: self.remove_requested.emit(self.attachment["path"]))
+                layout.addWidget(remove_button)
+
+            self.setCursor(Qt.CursorShape.PointingHandCursor)
+            self.setToolTip(attachment["name"])
+            self.refresh_file_name()
+
+    def file_glyph(self):
+        suffix = Path(self.attachment["name"]).suffix.lower()
+        glyphs = {
+            ".csv": "CSV",
+            ".json": "JSN",
+            ".md": "MD",
+            ".pdf": "PDF",
+            ".doc": "DOC",
+            ".docx": "DOC",
+            ".xls": "XLS",
+            ".xlsx": "XLS",
+            ".ppt": "PPT",
+            ".pptx": "PPT",
+            ".py": "PY",
+            ".kt": "KT",
+            ".zip": "ZIP",
+        }
+        return glyphs.get(suffix, "TXT")
+
+    def mousePressEvent(self, event):
+        if self.attachment["type"] != "image" and event.button() == Qt.MouseButton.LeftButton:
+            self.preview_requested.emit(self.attachment["path"])
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def refresh_file_name(self):
+        if self.attachment["type"] == "image" or self.name_label is None:
+            return
+        available_width = max(80, self.name_label.width() or 220)
+        elided = self.fontMetrics().elidedText(
+            self.attachment["name"],
+            Qt.TextElideMode.ElideRight,
+            available_width,
+        )
+        self.name_label.setText(elided)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self.refresh_file_name()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
         if self.attachment["type"] != "image":
+            self.refresh_file_name()
             return
         if self.preview is not None:
             preview_size = self.preview.size()
@@ -1071,6 +1134,61 @@ class ImageGalleryDialog(QDialog):
         self.update_view()
 
 
+class FilePreviewDialog(QDialog):
+    def __init__(self, path, parent=None):
+        super().__init__(parent)
+        self.path = Path(path)
+        self.setWindowTitle(self.path.name)
+        self.resize(980, 760)
+        self.setModal(True)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(18, 18, 18, 18)
+        root.setSpacing(14)
+
+        surface = QFrame()
+        surface.setObjectName("gallerySurface")
+        layout = QVBoxLayout(surface)
+        layout.setContentsMargins(18, 18, 18, 18)
+        layout.setSpacing(12)
+
+        header = QHBoxLayout()
+        title = QLabel(self.path.name)
+        title.setObjectName("titleLabel")
+        header.addWidget(title, 1)
+
+        open_external = QPushButton("Open Externally")
+        open_external.setObjectName("ghostButton")
+        open_external.clicked.connect(self.open_externally)
+        header.addWidget(open_external)
+
+        close_button = QPushButton("Close")
+        close_button.setObjectName("ghostButton")
+        close_button.clicked.connect(self.accept)
+        header.addWidget(close_button)
+        layout.addLayout(header)
+
+        self.viewer = QPlainTextEdit()
+        self.viewer.setReadOnly(True)
+        self.viewer.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
+        layout.addWidget(self.viewer, 1)
+
+        root.addWidget(surface)
+        self.load_content()
+
+    def load_content(self):
+        try:
+            content = self.path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            content = self.path.read_text(encoding="utf-8", errors="replace")
+        except OSError as exc:
+            content = f"Unable to open file.\n\n{exc}"
+        self.viewer.setPlainText(content)
+
+    def open_externally(self):
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(self.path)))
+
+
 class ChatCompletionWorker(QThread):
     token_received = pyqtSignal(str)
     thinking_received = pyqtSignal(str)
@@ -1170,6 +1288,7 @@ class ChatCompletionWorker(QThread):
 class MessageCard(QFrame):
     retry_requested = pyqtSignal(str)
     image_preview_requested = pyqtSignal(list, int)
+    file_preview_requested = pyqtSignal(str)
 
     def __init__(self, role, text="", timestamp=None, retry_text=None, attachments=None, parent=None):
         super().__init__(parent)
@@ -1291,18 +1410,25 @@ class MessageCard(QFrame):
             if widget is not None:
                 widget.deleteLater()
 
-        image_attachments = [item for item in self.attachments if item.get("type") == "image"]
-        if not image_attachments:
+        if not self.attachments:
             self.attachments_widget.hide()
             return
 
+        image_attachments = [item for item in self.attachments if item.get("type") == "image"]
         image_paths = [item["path"] for item in image_attachments]
-        for index, attachment in enumerate(image_attachments):
-            preview = ImagePreviewButton(attachment["path"])
-            preview.clicked_preview.connect(
-                lambda image_paths=image_paths, index=index: self.image_preview_requested.emit(image_paths, index)
-            )
-            self.attachments_layout.addWidget(preview)
+        image_index = 0
+        for attachment in self.attachments:
+            if attachment.get("type") == "image":
+                preview = ImagePreviewButton(attachment["path"])
+                preview.clicked_preview.connect(
+                    lambda image_paths=image_paths, index=image_index: self.image_preview_requested.emit(image_paths, index)
+                )
+                self.attachments_layout.addWidget(preview)
+                image_index += 1
+            else:
+                chip = AttachmentChip(attachment, removable=False)
+                chip.preview_requested.connect(self.file_preview_requested.emit)
+                self.attachments_layout.addWidget(chip)
 
         self.attachments_layout.addStretch()
         self.attachments_widget.show()
@@ -1912,7 +2038,7 @@ class AgentChatWindow(QMainWindow):
         self.attachment_scroll.setWidgetResizable(True)
         self.attachment_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.attachment_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.attachment_scroll.setFixedHeight(122)
+        self.attachment_scroll.setFixedHeight(58)
 
         self.attachments_wrap = QWidget()
         self.attachments_layout = QHBoxLayout(self.attachments_wrap)
@@ -2017,6 +2143,9 @@ class AgentChatWindow(QMainWindow):
             return "audio"
         return "file"
 
+    def is_text_preview_file(self, path):
+        return Path(path).suffix.lower() in TEXT_PREVIEW_SUFFIXES
+
     def add_attachments(self):
         paths, _ = QFileDialog.getOpenFileNames(
             self,
@@ -2050,6 +2179,12 @@ class AgentChatWindow(QMainWindow):
         self.refresh_attachment_summary()
         self.update_send_availability()
 
+    def attachment_area_height(self):
+        if not self.pending_attachments:
+            return 58
+        has_images = any(item["type"] == "image" for item in self.pending_attachments)
+        return 122 if has_images else 58
+
     def refresh_attachment_summary(self):
         while self.attachments_layout.count():
             item = self.attachments_layout.takeAt(0)
@@ -2058,14 +2193,16 @@ class AgentChatWindow(QMainWindow):
                 widget.deleteLater()
 
         if not self.pending_attachments:
+            self.attachment_scroll.setFixedHeight(self.attachment_area_height())
             self.attachment_scroll.hide()
             return
 
+        self.attachment_scroll.setFixedHeight(self.attachment_area_height())
         self.attachment_scroll.show()
         for attachment in self.pending_attachments:
             chip = AttachmentChip(attachment)
             chip.remove_requested.connect(self.remove_attachment)
-            chip.preview_requested.connect(self.open_attachment_preview)
+            chip.preview_requested.connect(self.open_attachment_item)
             self.attachments_layout.addWidget(chip)
 
         self.attachments_layout.addStretch()
@@ -2075,13 +2212,21 @@ class AgentChatWindow(QMainWindow):
         self.refresh_attachment_summary()
         self.update_send_availability()
 
-    def open_attachment_preview(self, clicked_path):
+    def open_attachment_item(self, clicked_path):
         image_paths = [item["path"] for item in self.pending_attachments if item["type"] == "image"]
-        if not image_paths:
+        if clicked_path in image_paths:
+            start_index = image_paths.index(clicked_path)
+            dialog = ImageGalleryDialog(image_paths, start_index=start_index, parent=self)
+            dialog.exec()
             return
-        start_index = image_paths.index(clicked_path) if clicked_path in image_paths else 0
-        dialog = ImageGalleryDialog(image_paths, start_index=start_index, parent=self)
-        dialog.exec()
+        self.open_file_attachment(clicked_path)
+
+    def open_file_attachment(self, path):
+        if self.is_text_preview_file(path):
+            dialog = FilePreviewDialog(path, parent=self)
+            dialog.exec()
+            return
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(Path(path).resolve())))
 
     def encode_attachment(self, path):
         with open(path, "rb") as handle:
@@ -2707,6 +2852,7 @@ class AgentChatWindow(QMainWindow):
         )
         card.retry_requested.connect(self.retry_message)
         card.image_preview_requested.connect(self.open_message_image_gallery)
+        card.file_preview_requested.connect(self.open_file_attachment)
         self.messages_layout.addWidget(card)
         self.update_empty_state()
         self.scroll_to_bottom()
