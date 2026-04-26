@@ -316,6 +316,37 @@ QPushButton#composerPlusButton:hover {
     border-radius: 16px;
     color: #d8dde2;
 }
+QPushButton#terminalPermissionButton {
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 14px;
+    color: #f2f3f5;
+    padding: 5px 9px;
+    font-size: 10pt;
+    font-weight: 400;
+}
+QPushButton#terminalPermissionButton[fullAccess="true"] {
+    color: #d5c537;
+}
+QPushButton#terminalPermissionButton:hover {
+    background: #1a1d20;
+    border-color: #2a2d30;
+}
+QPushButton#terminalPermissionButton:disabled {
+    color: #5f6368;
+    background: transparent;
+    border-color: transparent;
+}
+QFrame#terminalApprovalBanner {
+    background: #181a1c;
+    border: 1px solid #3e3520;
+    border-radius: 14px;
+}
+QLabel#terminalApprovalText {
+    color: #f0e6b2;
+    font-size: 10pt;
+    font-weight: 600;
+}
 QPushButton#iconActionButton {
     min-width: 32px;
     max-width: 32px;

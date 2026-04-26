@@ -8,8 +8,9 @@ from io import BytesIO
 from pathlib import Path
 
 import requests
-from PyQt6.QtCore import QBuffer, QEasingCurve, QEvent, QIODevice, QPoint, QPropertyAnimation, QTimer, QUrl, Qt
-from PyQt6.QtGui import QDesktopServices, QGuiApplication, QImage
+from PyQt6.QtCore import QByteArray, QBuffer, QEasingCurve, QEvent, QIODevice, QPoint, QPropertyAnimation, QTimer, QUrl, Qt
+from PyQt6.QtGui import QColor, QDesktopServices, QGuiApplication, QIcon, QImage, QPainter, QPixmap
+from PyQt6.QtSvg import QSvgRenderer
 from PyQt6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -41,6 +42,8 @@ from constants import (
     AGENT_TERMINAL_PROMPT,
     CONFIG_PATH,
     DEFAULT_SERVER_BASE_URL,
+    DEFAULT_PERMISSIONS_ICON_PATH,
+    FULL_ACCESS_ICON_PATH,
     MAX_ATTACHMENT_TEXT_CHARS,
     MAX_URL_DOWNLOAD_BYTES,
     MAX_URLS_PER_MESSAGE,
@@ -67,6 +70,14 @@ from widgets import (
 )
 from constants import ARROW_UP_ICON_PATH, STOP_ICON_PATH
 from worker import ChatCompletionWorker
+
+TERMINAL_PERMISSION_DEFAULT = "default"
+TERMINAL_PERMISSION_FULL_ACCESS = "full_access"
+DEFAULT_TERMINAL_PERMISSIONS = ["pwd", "ls", "date", "whoami", "uname"]
+TERMINAL_PERMISSION_COLORS = {
+    TERMINAL_PERMISSION_DEFAULT: "#f2f3f5",
+    TERMINAL_PERMISSION_FULL_ACCESS: "#d5c537",
+}
 
 class AgentChatWindow(QMainWindow):
     def __init__(self):
@@ -100,6 +111,13 @@ class AgentChatWindow(QMainWindow):
                 self.initial_session_prompt,
             )
         self.agent_terminal_enabled = bool(self.config.get("agent_terminal_enabled", False))
+        self.agent_terminal_permission = self.normalize_agent_terminal_permission(
+            self.config.get("agent_terminal_permission", TERMINAL_PERMISSION_DEFAULT)
+        )
+        self.default_permissions = self.clean_default_permissions(
+            self.config.get("default_permissions", DEFAULT_TERMINAL_PERMISSIONS)
+        )
+        self.pending_terminal_permission = None
         self.advanced_expanded = False
         self.sidebar_pinned = False
         self.sidebar_open = False
@@ -130,6 +148,8 @@ class AgentChatWindow(QMainWindow):
             "session_prompt": "",
             "session_prompts": [],
             "agent_terminal_enabled": True,
+            "agent_terminal_permission": TERMINAL_PERMISSION_DEFAULT,
+            "default_permissions": list(DEFAULT_TERMINAL_PERMISSIONS),
             "temperature": 0.7,
             "top_p": 0.9,
             "top_k": 40,
@@ -152,6 +172,8 @@ class AgentChatWindow(QMainWindow):
             "session_prompt": self.current_session_prompt_value(),
             "session_prompts": self.session_prompt_history,
             "agent_terminal_enabled": self.agent_terminal_enabled,
+            "agent_terminal_permission": self.agent_terminal_permission,
+            "default_permissions": self.default_permissions,
             "temperature": self.temperature_spin.value() if hasattr(self, "temperature_spin") else 0.7,
             "top_p": self.top_p_spin.value() if hasattr(self, "top_p_spin") else 0.9,
             "top_k": self.top_k_spin.value() if hasattr(self, "top_k_spin") else 40,
@@ -176,6 +198,59 @@ class AgentChatWindow(QMainWindow):
             if value and value not in cleaned:
                 cleaned.append(value)
         return cleaned
+
+    def normalize_agent_terminal_permission(self, value):
+        value = str(value or "").strip().lower()
+        if value == TERMINAL_PERMISSION_FULL_ACCESS:
+            return TERMINAL_PERMISSION_FULL_ACCESS
+        return TERMINAL_PERMISSION_DEFAULT
+
+    def clean_default_permissions(self, values):
+        cleaned = []
+        if not isinstance(values, list):
+            return list(DEFAULT_TERMINAL_PERMISSIONS)
+        for value in values:
+            command = str(value).strip()
+            if not command or any(char.isspace() for char in command):
+                continue
+            if command not in cleaned:
+                cleaned.append(command)
+        return cleaned or list(DEFAULT_TERMINAL_PERMISSIONS)
+
+    def terminal_permission_icon_path(self, permission):
+        if permission == TERMINAL_PERMISSION_FULL_ACCESS:
+            return FULL_ACCESS_ICON_PATH
+        return DEFAULT_PERMISSIONS_ICON_PATH
+
+    def terminal_permission_color(self, permission):
+        return TERMINAL_PERMISSION_COLORS.get(permission, TERMINAL_PERMISSION_COLORS[TERMINAL_PERMISSION_DEFAULT])
+
+    def tinted_svg_icon(self, icon_path, color, size=18):
+        try:
+            content = Path(icon_path).read_text(encoding="utf-8")
+        except OSError:
+            return QIcon()
+        svg = (
+            content
+            .replace("#000000", color)
+            .replace("#000", color)
+            .replace("#1C274C", color)
+            .replace("#292D32", color)
+        )
+        pixmap = QPixmap(size, size)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        renderer = QSvgRenderer(QByteArray(svg.encode("utf-8")))
+        renderer.render(painter)
+        painter.end()
+        return QIcon(pixmap)
+
+    def terminal_permission_icon(self, permission):
+        return self.tinted_svg_icon(
+            self.terminal_permission_icon_path(permission),
+            self.terminal_permission_color(permission),
+        )
 
     def add_history_value(self, values, value):
         value = value.strip()
@@ -265,6 +340,7 @@ class AgentChatWindow(QMainWindow):
 
         self.build_toast()
         self.refresh_session_prompt_ui()
+        self.refresh_terminal_permission_ui()
         self.update_empty_state()
         self.update_send_availability()
 
@@ -534,6 +610,28 @@ class AgentChatWindow(QMainWindow):
         terminal_row.addStretch()
         layout.addLayout(terminal_row)
 
+        self.agent_terminal_permission_combo = QComboBox()
+        self.agent_terminal_permission_combo.addItem(
+            self.terminal_permission_icon(TERMINAL_PERMISSION_DEFAULT),
+            "Default permissions",
+            TERMINAL_PERMISSION_DEFAULT,
+        )
+        self.agent_terminal_permission_combo.addItem(
+            self.terminal_permission_icon(TERMINAL_PERMISSION_FULL_ACCESS),
+            "Full access",
+            TERMINAL_PERMISSION_FULL_ACCESS,
+        )
+        self.agent_terminal_permission_combo.setCurrentIndex(
+            1 if self.agent_terminal_permission == TERMINAL_PERMISSION_FULL_ACCESS else 0
+        )
+        self.agent_terminal_permission_combo.currentIndexChanged.connect(self.on_agent_terminal_permission_changed)
+        layout.addWidget(self.agent_terminal_permission_combo)
+
+        self.default_permissions_detail = QLabel("")
+        self.default_permissions_detail.setObjectName("subtleLabel")
+        self.default_permissions_detail.setWordWrap(True)
+        layout.addWidget(self.default_permissions_detail)
+
         preset_row = QHBoxLayout()
         preset_row.setSpacing(10)
         preset_label = QLabel("Presets")
@@ -663,6 +761,40 @@ class AgentChatWindow(QMainWindow):
         self.queue_banner.hide()
         canvas_layout.addWidget(self.queue_banner)
 
+        self.terminal_approval_banner = QFrame()
+        self.terminal_approval_banner.setObjectName("terminalApprovalBanner")
+        approval_layout = QVBoxLayout(self.terminal_approval_banner)
+        approval_layout.setContentsMargins(12, 10, 12, 10)
+        approval_layout.setSpacing(8)
+
+        self.terminal_approval_label = QLabel("")
+        self.terminal_approval_label.setObjectName("terminalApprovalText")
+        self.terminal_approval_label.setWordWrap(True)
+        approval_layout.addWidget(self.terminal_approval_label)
+
+        approval_actions = QHBoxLayout()
+        approval_actions.setSpacing(8)
+
+        self.terminal_approval_yes_button = QPushButton("Yes")
+        self.terminal_approval_yes_button.setObjectName("tinyButton")
+        self.terminal_approval_yes_button.clicked.connect(lambda: self.resolve_terminal_permission("allow_once"))
+        approval_actions.addWidget(self.terminal_approval_yes_button)
+
+        self.terminal_approval_always_button = QPushButton("")
+        self.terminal_approval_always_button.setObjectName("tinyButton")
+        self.terminal_approval_always_button.clicked.connect(lambda: self.resolve_terminal_permission("allow_always"))
+        approval_actions.addWidget(self.terminal_approval_always_button)
+
+        self.terminal_approval_no_button = QPushButton("Dismiss")
+        self.terminal_approval_no_button.setObjectName("ghostButton")
+        self.terminal_approval_no_button.clicked.connect(lambda: self.resolve_terminal_permission("reject"))
+        approval_actions.addWidget(self.terminal_approval_no_button)
+        approval_actions.addStretch()
+        approval_layout.addLayout(approval_actions)
+
+        self.terminal_approval_banner.hide()
+        canvas_layout.addWidget(self.terminal_approval_banner)
+
         self.composer = AutoResizingTextEdit()
         self.composer.send_requested.connect(self.send_message)
         self.composer.attachment_paths_pasted.connect(self.add_attachment_paths)
@@ -677,6 +809,11 @@ class AgentChatWindow(QMainWindow):
         self.attach_button.setToolTip("Add files")
         self.attach_button.clicked.connect(self.add_attachments)
         footer_row.addWidget(self.attach_button)
+
+        self.terminal_permission_button = QPushButton("")
+        self.terminal_permission_button.setObjectName("terminalPermissionButton")
+        self.terminal_permission_button.clicked.connect(self.show_terminal_permission_menu)
+        footer_row.addWidget(self.terminal_permission_button)
 
         self.composer_hint = QLabel("Shift+Enter for newline")
         self.composer_hint.setObjectName("subtleLabel")
@@ -723,12 +860,83 @@ class AgentChatWindow(QMainWindow):
 
     def set_agent_terminal_enabled(self, enabled):
         self.agent_terminal_enabled = bool(enabled)
+        if not self.agent_terminal_enabled and self.pending_terminal_permission and self.worker is not None:
+            self.worker.resolve_terminal_permission("reject")
+            self.pending_terminal_permission = None
+            if hasattr(self, "terminal_approval_banner"):
+                self.terminal_approval_banner.hide()
         self.save_config()
+        self.refresh_terminal_permission_ui()
         self.set_status_message(
             "Terminal agent enabled. Commands run in the app workspace."
             if self.agent_terminal_enabled
             else "Terminal agent disabled."
         )
+
+    def on_agent_terminal_permission_changed(self, _index):
+        if not hasattr(self, "agent_terminal_permission_combo"):
+            return
+        self.set_agent_terminal_permission(self.agent_terminal_permission_combo.currentData())
+
+    def set_agent_terminal_permission(self, value):
+        value = self.normalize_agent_terminal_permission(value)
+        if self.agent_terminal_permission == value:
+            self.refresh_terminal_permission_ui()
+            return
+        self.agent_terminal_permission = value
+        self.save_config()
+        self.refresh_terminal_permission_ui()
+        self.set_status_message(f"Terminal permission set to {self.agent_terminal_permission_label()}.")
+
+    def agent_terminal_permission_label(self):
+        if self.agent_terminal_permission == TERMINAL_PERMISSION_FULL_ACCESS:
+            return "Full access"
+        return "Default permissions"
+
+    def show_terminal_permission_menu(self):
+        menu = QMenu(self)
+        default_action = menu.addAction("Default permissions")
+        default_action.setIcon(self.terminal_permission_icon(TERMINAL_PERMISSION_DEFAULT))
+        default_action.setCheckable(True)
+        default_action.setChecked(self.agent_terminal_permission == TERMINAL_PERMISSION_DEFAULT)
+        default_action.triggered.connect(lambda: self.set_agent_terminal_permission(TERMINAL_PERMISSION_DEFAULT))
+
+        full_action = menu.addAction("Full access")
+        full_action.setIcon(self.terminal_permission_icon(TERMINAL_PERMISSION_FULL_ACCESS))
+        full_action.setCheckable(True)
+        full_action.setChecked(self.agent_terminal_permission == TERMINAL_PERMISSION_FULL_ACCESS)
+        full_action.triggered.connect(lambda: self.set_agent_terminal_permission(TERMINAL_PERMISSION_FULL_ACCESS))
+
+        menu.exec(self.terminal_permission_button.mapToGlobal(self.terminal_permission_button.rect().bottomLeft()))
+
+    def refresh_terminal_permission_ui(self):
+        label = self.agent_terminal_permission_label()
+        if hasattr(self, "terminal_permission_button"):
+            suffix = " enabled" if self.agent_terminal_enabled else " disabled"
+            self.terminal_permission_button.setText(f"{label} ▾")
+            self.terminal_permission_button.setIcon(self.terminal_permission_icon(self.agent_terminal_permission))
+            self.terminal_permission_button.setToolTip(f"Terminal access is{suffix}.")
+            self.terminal_permission_button.setProperty(
+                "fullAccess",
+                self.agent_terminal_permission == TERMINAL_PERMISSION_FULL_ACCESS,
+            )
+            self.terminal_permission_button.style().unpolish(self.terminal_permission_button)
+            self.terminal_permission_button.style().polish(self.terminal_permission_button)
+            self.terminal_permission_button.setEnabled(self.agent_terminal_enabled)
+        if hasattr(self, "agent_terminal_checkbox"):
+            self.agent_terminal_checkbox.blockSignals(True)
+            self.agent_terminal_checkbox.setChecked(self.agent_terminal_enabled)
+            self.agent_terminal_checkbox.blockSignals(False)
+        if hasattr(self, "agent_terminal_permission_combo"):
+            self.agent_terminal_permission_combo.blockSignals(True)
+            self.agent_terminal_permission_combo.setCurrentIndex(
+                1 if self.agent_terminal_permission == TERMINAL_PERMISSION_FULL_ACCESS else 0
+            )
+            self.agent_terminal_permission_combo.setEnabled(self.agent_terminal_enabled)
+            self.agent_terminal_permission_combo.blockSignals(False)
+        if hasattr(self, "default_permissions_detail"):
+            allowed = ", ".join(self.default_permissions)
+            self.default_permissions_detail.setText(f"Default commands: {allowed}")
 
     def detect_attachment_type(self, path):
         mime_type, _ = mimetypes.guess_type(path)
@@ -1430,12 +1638,15 @@ class AgentChatWindow(QMainWindow):
             top_p=self.top_p_spin.value(),
             top_k=self.top_k_spin.value(),
             agent_terminal_enabled=self.agent_terminal_enabled,
+            agent_terminal_permission=self.agent_terminal_permission,
+            default_permissions=self.default_permissions,
         )
         self.worker.token_received.connect(self.on_token_received)
         self.worker.thinking_received.connect(self.on_thinking_received)
         self.worker.terminal_command_started.connect(self.on_terminal_command_started)
         self.worker.terminal_log_received.connect(self.on_terminal_log_received)
         self.worker.terminal_command_finished.connect(self.on_terminal_command_finished)
+        self.worker.terminal_permission_requested.connect(self.on_terminal_permission_requested)
         self.worker.generation_started.connect(self.on_generation_started)
         self.worker.generation_finished.connect(self.on_generation_finished)
         self.worker.error_occurred.connect(self.on_error)
@@ -1644,6 +1855,43 @@ class AgentChatWindow(QMainWindow):
             self.current_assistant_card.append_thinking(token, self.show_thinking_checkbox.isChecked())
         self.scroll_to_bottom()
 
+    def on_terminal_permission_requested(self, command, command_key):
+        self.pending_terminal_permission = {
+            "command": command,
+            "command_key": command_key,
+        }
+        display_command = " ".join(command.split())
+        if len(display_command) > 180:
+            display_command = display_command[:177] + "..."
+        self.terminal_approval_label.setText(f"Run terminal command?\n{display_command}")
+        remember_label = f"Yes and don't ask again for this command {command_key or display_command}"
+        self.terminal_approval_always_button.setText(remember_label)
+        self.terminal_approval_always_button.setEnabled(bool(command_key))
+        self.terminal_approval_banner.show()
+        self.status_badge.setText("Permission needed")
+        self.status_detail.setText("Terminal command is waiting for approval.")
+        self.scroll_to_bottom()
+
+    def resolve_terminal_permission(self, decision):
+        if not self.pending_terminal_permission:
+            return
+        command_key = self.pending_terminal_permission.get("command_key", "")
+        if decision == "allow_always" and command_key and command_key not in self.default_permissions:
+            self.default_permissions.append(command_key)
+            self.default_permissions = self.clean_default_permissions(self.default_permissions)
+            self.save_config()
+            self.refresh_terminal_permission_ui()
+        self.terminal_approval_banner.hide()
+        self.pending_terminal_permission = None
+        if self.worker is not None and self.worker.isRunning():
+            self.worker.resolve_terminal_permission(decision)
+        if decision == "reject":
+            self.status_badge.setText("Dismissed")
+            self.status_detail.setText("Command dismissed. The model will continue without running it.")
+        else:
+            self.status_badge.setText("Generating")
+            self.status_detail.setText("Terminal command approved.")
+
     def on_terminal_command_started(self, command, shell_name):
         if self.current_assistant_card is not None:
             self.current_assistant_card.stop_loading()
@@ -1664,6 +1912,9 @@ class AgentChatWindow(QMainWindow):
     def on_generation_finished(self, success, stopped, full_response, _full_thinking):
         if self.current_assistant_card is not None:
             self.current_assistant_card.stop_loading()
+        if hasattr(self, "terminal_approval_banner"):
+            self.terminal_approval_banner.hide()
+        self.pending_terminal_permission = None
         if success and self.pending_user_message and full_response.strip():
             self.history.append(self.pending_user_message)
             clean_response = normalize_terminal_fences(
@@ -1690,12 +1941,20 @@ class AgentChatWindow(QMainWindow):
         self.composer.setFocus()
 
     def on_error(self, message):
+        if hasattr(self, "terminal_approval_banner"):
+            self.terminal_approval_banner.hide()
+        self.pending_terminal_permission = None
         self.status_badge.setText("Request failed")
         self.status_detail.setText(message)
         self.add_message("system", message)
         self.process_next_queued_message()
 
     def stop_generation(self):
+        if self.pending_terminal_permission and self.worker is not None:
+            self.worker.resolve_terminal_permission("reject")
+        if hasattr(self, "terminal_approval_banner"):
+            self.terminal_approval_banner.hide()
+        self.pending_terminal_permission = None
         if self.worker is not None and self.worker.isRunning():
             self.worker.stop()
 
@@ -1797,6 +2056,9 @@ class AgentChatWindow(QMainWindow):
         self.history = []
         self.pending_user_text = None
         self.pending_user_message = None
+        self.pending_terminal_permission = None
+        if hasattr(self, "terminal_approval_banner"):
+            self.terminal_approval_banner.hide()
         self.message_queue = []
         previous_prompt = self.session_system_prompt or self.system_prompt_input.toPlainText().strip()
         self.session_system_prompt = ""

@@ -3,8 +3,10 @@
 import json
 import os
 import selectors
+import shlex
 import signal
 import subprocess
+import threading
 import time
 
 import requests
@@ -25,6 +27,7 @@ class ChatCompletionWorker(QThread):
     terminal_command_started = pyqtSignal(str, str)
     terminal_log_received = pyqtSignal(str)
     terminal_command_finished = pyqtSignal(str)
+    terminal_permission_requested = pyqtSignal(str, str)
     generation_started = pyqtSignal()
     generation_finished = pyqtSignal(bool, bool, str, str)
     error_occurred = pyqtSignal(str)
@@ -41,9 +44,24 @@ class ChatCompletionWorker(QThread):
         self.full_response = ""
         self.full_thinking = ""
         self.agent_terminal_enabled = False
+        self.agent_terminal_permission = "default"
+        self.default_permissions = set()
         self.terminal_cwd = APP_WORKSPACE
+        self.permission_condition = threading.Condition()
+        self.pending_permission_decision = None
 
-    def configure(self, base_url, model_name, messages, temperature, top_p, top_k, agent_terminal_enabled=False):
+    def configure(
+        self,
+        base_url,
+        model_name,
+        messages,
+        temperature,
+        top_p,
+        top_k,
+        agent_terminal_enabled=False,
+        agent_terminal_permission="default",
+        default_permissions=None,
+    ):
         self.base_url = base_url
         self.model_name = model_name
         self.messages = messages
@@ -51,6 +69,8 @@ class ChatCompletionWorker(QThread):
         self.top_p = top_p
         self.top_k = top_k
         self.agent_terminal_enabled = bool(agent_terminal_enabled)
+        self.agent_terminal_permission = agent_terminal_permission
+        self.default_permissions = set(default_permissions or [])
 
     def run(self):
         self.stop_requested = False
@@ -73,6 +93,24 @@ class ChatCompletionWorker(QThread):
                 if not self.agent_terminal_enabled or not command:
                     success = True
                     break
+
+                approval = self.terminal_command_approval(command)
+                if approval == "reject":
+                    if self.stop_requested:
+                        stopped = True
+                        break
+                    messages.append({"role": "assistant", "content": response_text})
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                "The requested terminal command was dismissed by the user and was not run:\n\n"
+                                f"```terminal\n$ {command}\n[dismissed]\n```\n\n"
+                                "Continue without running that command. If you can answer from existing context, do so."
+                            ),
+                        }
+                    )
+                    continue
 
                 self.terminal_command_started.emit(command, "Bash")
                 terminal_result = self.run_terminal_command(command)
@@ -111,6 +149,7 @@ class ChatCompletionWorker(QThread):
 
     def stop(self):
         self.stop_requested = True
+        self.resolve_terminal_permission("reject")
 
     def stream_chat_completion(self, messages):
         payload = {
@@ -164,6 +203,48 @@ class ChatCompletionWorker(QThread):
         if not match:
             return ""
         return (match.group(1) or match.group(2) or "").strip()
+
+    def terminal_command_key(self, command):
+        try:
+            parts = shlex.split(command)
+        except ValueError:
+            parts = command.split()
+        if not parts:
+            return ""
+        return os.path.basename(parts[0])
+
+    def terminal_command_approval(self, command):
+        if self.agent_terminal_permission == "full_access":
+            return "allow"
+        command_key = self.terminal_command_key(command)
+        if command_key and command_key in self.default_permissions and not self.command_has_shell_control(command):
+            return "allow"
+        return self.wait_for_terminal_permission(command, command_key)
+
+    def command_has_shell_control(self, command):
+        control_tokens = ("&&", "||", ";", "|", ">", "<", "`", "$(", "\n", "\r")
+        return any(token in command for token in control_tokens)
+
+    def wait_for_terminal_permission(self, command, command_key):
+        with self.permission_condition:
+            self.pending_permission_decision = None
+        self.terminal_permission_requested.emit(command, command_key)
+        with self.permission_condition:
+            while self.pending_permission_decision is None and not self.stop_requested:
+                self.permission_condition.wait(timeout=0.1)
+            decision = self.pending_permission_decision or "reject"
+            self.pending_permission_decision = None
+        if decision == "allow_always" and command_key:
+            self.default_permissions.add(command_key)
+            return "allow"
+        if decision == "allow_once":
+            return "allow"
+        return "reject"
+
+    def resolve_terminal_permission(self, decision):
+        with self.permission_condition:
+            self.pending_permission_decision = decision
+            self.permission_condition.notify_all()
 
     def run_terminal_command(self, command):
         process = None
