@@ -9,6 +9,8 @@ import mimetypes
 import re
 import sys
 import tempfile
+from html.parser import HTMLParser
+from io import BytesIO
 from math import ceil
 from datetime import datetime
 from pathlib import Path
@@ -559,8 +561,68 @@ TEXT_PREVIEW_SUFFIXES = {
 }
 MAX_ATTACHMENT_TEXT_CHARS = 12000
 MAX_URLS_PER_MESSAGE = 4
+MAX_URL_DOWNLOAD_BYTES = 8 * 1024 * 1024
+MAX_URL_TEXT_CHARS = 16000
+URL_FETCH_TIMEOUT = 12
 URL_RE = re.compile(r"https?://[^\s<>\]\)\"']+", re.IGNORECASE)
 TRAILING_URL_PUNCTUATION = ".,;:!?)]}\"'"
+
+
+class HtmlTextExtractor(HTMLParser):
+    SKIP_TAGS = {"script", "style", "noscript", "template", "svg", "canvas"}
+    BLOCK_TAGS = {
+        "address", "article", "aside", "blockquote", "br", "dd", "div", "dl", "dt",
+        "fieldset", "figcaption", "figure", "footer", "form", "h1", "h2", "h3", "h4",
+        "h5", "h6", "header", "hr", "li", "main", "nav", "ol", "p", "pre", "section",
+        "table", "td", "th", "tr", "ul",
+    }
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.parts = []
+        self.skip_depth = 0
+        self.title = ""
+        self._in_title = False
+
+    def handle_starttag(self, tag, attrs):
+        tag = tag.lower()
+        if tag in self.SKIP_TAGS:
+            self.skip_depth += 1
+            return
+        if tag == "title":
+            self._in_title = True
+        if tag in self.BLOCK_TAGS:
+            self.parts.append("\n")
+
+    def handle_endtag(self, tag):
+        tag = tag.lower()
+        if tag in self.SKIP_TAGS and self.skip_depth:
+            self.skip_depth -= 1
+            return
+        if tag == "title":
+            self._in_title = False
+        if tag in self.BLOCK_TAGS:
+            self.parts.append("\n")
+
+    def handle_data(self, data):
+        if self.skip_depth:
+            return
+        text = " ".join(data.split())
+        if not text:
+            return
+        if self._in_title:
+            self.title = f"{self.title} {text}".strip()
+            return
+        self.parts.append(text)
+        self.parts.append(" ")
+
+    def text(self):
+        content = "".join(self.parts)
+        content = re.sub(r"[ \t]+\n", "\n", content)
+        content = re.sub(r"\n[ \t]+", "\n", content)
+        content = re.sub(r"\n{3,}", "\n\n", content)
+        content = re.sub(r"[ \t]{2,}", " ", content)
+        return content.strip()
 
 
 class DeletableHistoryDelegate(QStyledItemDelegate):
@@ -2321,6 +2383,110 @@ class AgentChatWindow(QMainWindow):
                 break
         return urls
 
+    def fetch_url_bytes(self, url):
+        with requests.get(
+            url,
+            timeout=URL_FETCH_TIMEOUT,
+            stream=True,
+            headers={"User-Agent": "agent-chat-ui/1.0"},
+        ) as response:
+            response.raise_for_status()
+            content_type = response.headers.get("content-type", "").split(";")[0].strip().lower()
+            chunks = []
+            total = 0
+            for chunk in response.iter_content(chunk_size=65536):
+                if not chunk:
+                    continue
+                total += len(chunk)
+                if total > MAX_URL_DOWNLOAD_BYTES:
+                    raise ValueError("download exceeded the size limit")
+                chunks.append(chunk)
+            return b"".join(chunks), content_type, response.encoding
+
+    def decode_url_text(self, data, encoding=None):
+        for candidate in [encoding, "utf-8", "utf-8-sig", "latin-1"]:
+            if not candidate:
+                continue
+            try:
+                return data.decode(candidate)
+            except (LookupError, UnicodeDecodeError):
+                continue
+        return data.decode("utf-8", errors="replace")
+
+    def extract_pdf_text_bytes(self, data):
+        if PdfReader is None:
+            return "PDF extraction is unavailable because `pypdf` is not installed."
+        reader = PdfReader(BytesIO(data))
+        parts = []
+        for page_number, page in enumerate(reader.pages, start=1):
+            text = (page.extract_text() or "").strip()
+            if text:
+                parts.append(f"[Page {page_number}]\n{text}")
+            if sum(len(part) for part in parts) >= MAX_URL_TEXT_CHARS:
+                break
+        if not parts:
+            return "No extractable text was found in this PDF."
+        return "\n\n".join(parts)
+
+    def fetch_url_for_prompt(self, url):
+        data, content_type, encoding = self.fetch_url_bytes(url)
+        suffix = Path(url.split("?", 1)[0]).suffix.lower()
+
+        image_mime_type = content_type if content_type.startswith("image/") else mimetypes.guess_type(url)[0]
+        if image_mime_type and image_mime_type.startswith("image/"):
+            encoded = base64.b64encode(data).decode("utf-8")
+            return {
+                "kind": "image",
+                "url": url,
+                "data_url": f"data:{image_mime_type};base64,{encoded}",
+            }
+
+        if content_type == "application/pdf" or suffix == ".pdf":
+            text = self.extract_pdf_text_bytes(data)
+            media_label = "PDF"
+        else:
+            raw_text = self.decode_url_text(data, encoding)
+            looks_like_html = raw_text.lstrip().lower().startswith(("<!doctype html", "<html"))
+            if "html" in content_type or suffix in {".htm", ".html"} or looks_like_html:
+                extractor = HtmlTextExtractor()
+                extractor.feed(raw_text)
+                title = extractor.title
+                text = extractor.text()
+                if title:
+                    text = f"Title: {title}\n\n{text}"
+                media_label = "Web page"
+            else:
+                text = raw_text.strip()
+                media_label = content_type or "Text"
+
+        text = text.strip()
+        if len(text) > MAX_URL_TEXT_CHARS:
+            text = text[:MAX_URL_TEXT_CHARS] + "\n\n[Truncated]"
+        if not text:
+            text = "No readable text was found."
+        return {
+            "kind": "text",
+            "url": url,
+            "label": media_label,
+            "text": text,
+        }
+
+    def fetch_urls_for_prompt(self, user_text):
+        url_results = []
+        for url in self.detect_urls(user_text):
+            try:
+                url_results.append(self.fetch_url_for_prompt(url))
+            except Exception as exc:
+                url_results.append(
+                    {
+                        "kind": "text",
+                        "url": url,
+                        "label": "Fetch error",
+                        "text": f"Unable to fetch this URL: {exc}",
+                    }
+                )
+        return url_results
+
     def sidebar_enter_event(self, event):
         self.sidebar_hover_timer.start()
         event.accept()
@@ -2639,17 +2805,31 @@ class AgentChatWindow(QMainWindow):
         )
         self.queue_banner.show()
 
+    def has_existing_conversation_content(self):
+        return (
+            bool(self.history)
+            or self.messages_layout.count() > 0
+            or self.current_assistant_card is not None
+            or bool(self.message_queue)
+        )
+
     def make_submission(self, user_text, attachments):
         prompt_text = user_text.strip()
-        self.set_status_message("Preparing message...")
-        user_message = self.build_user_message(prompt_text, attachments)
-        user_display = prompt_text or "Sent attachments."
-        if attachments:
-            names = ", ".join(item["name"] for item in attachments)
-            user_display = f"{user_display}\n\nAttachments: {names}"
+        self.set_status_message("Reading links..." if self.detect_urls(prompt_text) else "Preparing message...")
+        url_inputs = self.fetch_urls_for_prompt(prompt_text) if prompt_text else []
+        user_message = self.build_user_message(prompt_text, attachments, url_inputs)
+        if prompt_text:
+            user_display = prompt_text
+        elif attachments:
+            user_display = (
+                "Refer to this:" if self.has_existing_conversation_content() else "Sent attachments."
+            )
+        else:
+            user_display = ""
         return {
             "user_text": prompt_text,
             "attachments": attachments,
+            "url_inputs": url_inputs,
             "user_message": user_message,
             "user_display": user_display,
             "model_name": self.model_selector.currentText().strip(),
@@ -2815,13 +2995,30 @@ class AgentChatWindow(QMainWindow):
         self.apply_prompt_button.style().polish(self.apply_prompt_button)
         self.refresh_session_prompt_history_ui()
 
-    def build_user_message(self, user_text, attachments):
-        if not attachments:
+    def build_user_message(self, user_text, attachments, url_inputs=None):
+        url_inputs = url_inputs or []
+        if not attachments and not url_inputs:
             return {"role": "user", "content": user_text}
 
         prompt = user_text or "Describe the attached inputs."
         content = [{"type": "text", "text": prompt}]
         attachment_sections = []
+        url_sections = []
+
+        for item in url_inputs:
+            if item["kind"] == "image":
+                content.append(
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": item["data_url"]},
+                    }
+                )
+                url_sections.append(f"Image URL fetched: {item['url']}")
+            else:
+                url_sections.append(
+                    f"URL: {item['url']}\nType: {item['label']}\n```text\n{item['text']}\n```"
+                )
+
         for item in attachments:
             if item["type"] == "image":
                 content.append(
@@ -2840,6 +3037,10 @@ class AgentChatWindow(QMainWindow):
                     attachment_sections.append(
                         f"File attached: {item['name']} (binary or unsupported for inline extraction)."
                     )
+        if url_sections:
+            content[0]["text"] = (
+                f"{content[0]['text']}\n\nFetched URL contents:\n\n" + "\n\n".join(url_sections)
+            )
         if attachment_sections:
             content[0]["text"] = (
                 f"{content[0]['text']}\n\nAttached file contents:\n\n" + "\n\n".join(attachment_sections)
