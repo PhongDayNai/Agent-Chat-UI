@@ -890,6 +890,9 @@ class TerminalCommandBlock(QFrame):
         self.set_expanded(False)
 
 class AssistantCodeHighlighter(QSyntaxHighlighter):
+    PYTHON_TRIPLE_SINGLE_STATE = 1
+    PYTHON_TRIPLE_DOUBLE_STATE = 2
+
     def __init__(self, document, language=""):
         super().__init__(document)
         self.language = (language or "").lower()
@@ -929,21 +932,7 @@ class AssistantCodeHighlighter(QSyntaxHighlighter):
             if comment_index >= 0:
                 self.setFormat(comment_index, len(text) - comment_index, self.comment_format)
         elif stripped_language in {"python", "py"}:
-            self.highlight_regex(
-                text,
-                r"\b(def|class|for|while|if|elif|else|return|import|from|in|try|except|with|as|pass|break|continue|and|or|not|True|False|None|lambda|yield)\b",
-                self.keyword_format,
-            )
-            self.highlight_regex(
-                text,
-                r"\b(print|range|len|str|int|float|list|dict|set|tuple|enumerate|zip|open|sum|min|max)\b(?=\s*\()",
-                self.function_format,
-            )
-            self.highlight_regex(text, r"\b\d+(?:\.\d+)?\b", self.number_format)
-            self.highlight_strings(text)
-            comment_index = text.find("#")
-            if comment_index >= 0:
-                self.setFormat(comment_index, len(text) - comment_index, self.comment_format)
+            self.highlight_python(text)
         elif stripped_language in {"javascript", "js", "typescript", "ts", "tsx", "jsx"}:
             self.highlight_regex(
                 text,
@@ -981,6 +970,104 @@ class AssistantCodeHighlighter(QSyntaxHighlighter):
             start = match.start(group)
             end = match.end(group)
             self.setFormat(start, end - start, fmt)
+
+    def highlight_python(self, text):
+        self.setCurrentBlockState(0)
+        protected_ranges = self.highlight_python_strings_and_comments(text)
+        self.highlight_python_regex(
+            text,
+            r"\b(def|class|for|while|if|elif|else|return|import|from|in|try|except|with|as|pass|break|continue|and|or|not|True|False|None|lambda|yield)\b",
+            self.keyword_format,
+            protected_ranges,
+        )
+        self.highlight_python_regex(
+            text,
+            r"\b(print|range|len|str|int|float|list|dict|set|tuple|enumerate|zip|open|sum|min|max)\b(?=\s*\()",
+            self.function_format,
+            protected_ranges,
+        )
+        self.highlight_python_regex(text, r"\b\d+(?:\.\d+)?\b", self.number_format, protected_ranges)
+
+    def highlight_python_strings_and_comments(self, text):
+        ranges = []
+        index = 0
+        previous_state = self.previousBlockState()
+        if previous_state == self.PYTHON_TRIPLE_SINGLE_STATE:
+            index = self.highlight_python_triple_continuation(text, "'''", previous_state, ranges)
+        elif previous_state == self.PYTHON_TRIPLE_DOUBLE_STATE:
+            index = self.highlight_python_triple_continuation(text, '"""', previous_state, ranges)
+
+        while index < len(text):
+            character = text[index]
+            if character == "#":
+                self.setFormat(index, len(text) - index, self.comment_format)
+                ranges.append((index, len(text)))
+                break
+            if character in {"'", '"'}:
+                quote = character
+                if text.startswith(quote * 3, index):
+                    end = self.highlight_python_triple_start(text, index, quote, ranges)
+                    if self.currentBlockState() != 0:
+                        break
+                    index = end
+                    continue
+                end = self.find_python_string_end(text, index, quote)
+                self.setFormat(index, end - index, self.string_format)
+                ranges.append((index, end))
+                index = end
+                continue
+            index += 1
+        return ranges
+
+    def highlight_python_triple_start(self, text, index, quote, ranges):
+        delimiter = quote * 3
+        state = self.PYTHON_TRIPLE_SINGLE_STATE if quote == "'" else self.PYTHON_TRIPLE_DOUBLE_STATE
+        end_index = text.find(delimiter, index + 3)
+        if end_index < 0:
+            self.setFormat(index, len(text) - index, self.string_format)
+            ranges.append((index, len(text)))
+            self.setCurrentBlockState(state)
+            return len(text)
+        end = end_index + 3
+        self.setFormat(index, end - index, self.string_format)
+        ranges.append((index, end))
+        return end
+
+    def highlight_python_triple_continuation(self, text, quote, state, ranges):
+        end_index = text.find(quote)
+        if end_index < 0:
+            self.setFormat(0, len(text), self.string_format)
+            ranges.append((0, len(text)))
+            self.setCurrentBlockState(state)
+            return len(text)
+        end = end_index + 3
+        self.setFormat(0, end, self.string_format)
+        ranges.append((0, end))
+        self.setCurrentBlockState(0)
+        return end
+
+    def find_python_string_end(self, text, start, quote):
+        index = start + 1
+        escaped = False
+        while index < len(text):
+            character = text[index]
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == quote:
+                return index + 1
+            index += 1
+        return len(text)
+
+    def highlight_python_regex(self, text, pattern, fmt, protected_ranges):
+        for match in re.finditer(pattern, text):
+            if self.range_overlaps(match.start(), match.end(), protected_ranges):
+                continue
+            self.setFormat(match.start(), match.end() - match.start(), fmt)
+
+    def range_overlaps(self, start, end, ranges):
+        return any(start < range_end and end > range_start for range_start, range_end in ranges)
 
     def highlight_strings(self, text):
         self.highlight_regex(text, r'"([^"\\]|\\.)*"', self.string_format)
