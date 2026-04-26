@@ -74,6 +74,8 @@ from worker import ChatCompletionWorker
 TERMINAL_PERMISSION_DEFAULT = "default"
 TERMINAL_PERMISSION_FULL_ACCESS = "full_access"
 DEFAULT_TERMINAL_PERMISSIONS = ["pwd", "ls", "date", "whoami", "uname"]
+DEFAULT_ASSISTANT_DEBOUNCE_ENABLED = True
+DEFAULT_ASSISTANT_DEBOUNCE_INTERVAL_MS = 45
 TERMINAL_PERMISSION_COLORS = {
     TERMINAL_PERMISSION_DEFAULT: "#f2f3f5",
     TERMINAL_PERMISSION_FULL_ACCESS: "#d5c537",
@@ -95,31 +97,52 @@ class AgentChatWindow(QMainWindow):
         self.available_models = []
         self.base_url = DEFAULT_SERVER_BASE_URL
         self.config = self.load_config()
-        configured_base_url = self.normalize_base_url(self.config.get("base_url", ""))
+        server_config = self.config.get("server", {})
+        session_prompt_config = self.config.get("session_prompt", {})
+        terminal_config = self.config.get("agent_terminal", {})
+        rendering_config = self.config.get("assistant_rendering", {})
+        sampling_config = self.config.get("sampling", {})
+        ui_config = self.config.get("ui", {})
+
+        self.server_enabled = bool(server_config.get("enabled", True))
+        configured_base_url = self.normalize_base_url(server_config.get("base_url", ""))
         if configured_base_url:
             self.base_url = configured_base_url
         self.base_url_history = self.clean_history(
-            self.config.get("base_urls", []),
+            server_config.get("base_urls", []),
             normalizer=self.normalize_base_url,
         )
         self.base_url_history = self.add_history_value(self.base_url_history, self.base_url)
-        self.session_prompt_history = self.clean_history(self.config.get("session_prompts", []))
-        self.initial_session_prompt = str(self.config.get("session_prompt", "")).strip()
+        self.session_prompt_enabled = bool(session_prompt_config.get("enabled", True))
+        self.session_prompt_history = self.clean_history(session_prompt_config.get("history", []))
+        self.initial_session_prompt = str(session_prompt_config.get("value", "")).strip()
         if self.initial_session_prompt:
             self.session_prompt_history = self.add_history_value(
                 self.session_prompt_history,
                 self.initial_session_prompt,
             )
-        self.agent_terminal_enabled = bool(self.config.get("agent_terminal_enabled", False))
+        self.agent_terminal_enabled = bool(terminal_config.get("enabled", False))
         self.agent_terminal_permission = self.normalize_agent_terminal_permission(
-            self.config.get("agent_terminal_permission", TERMINAL_PERMISSION_DEFAULT)
+            terminal_config.get("permission", TERMINAL_PERMISSION_DEFAULT)
         )
         self.default_permissions = self.clean_default_permissions(
-            self.config.get("default_permissions", DEFAULT_TERMINAL_PERMISSIONS)
+            terminal_config.get("default_permissions", DEFAULT_TERMINAL_PERMISSIONS)
         )
+        self.sampling_enabled = bool(sampling_config.get("enabled", True))
+        self.assistant_rendering_enabled = bool(rendering_config.get("enabled", True))
+        self.assistant_debounce_enabled = self.assistant_rendering_enabled and bool(
+            rendering_config.get("debounce_enabled", DEFAULT_ASSISTANT_DEBOUNCE_ENABLED)
+        )
+        self.assistant_debounce_interval_ms = self.normalize_debounce_interval(
+            rendering_config.get("debounce_interval_ms", DEFAULT_ASSISTANT_DEBOUNCE_INTERVAL_MS)
+        )
+        self.show_thinking = bool(ui_config.get("show_thinking", False))
+        self.pin_panel = bool(ui_config.get("pin_panel", False))
         self.pending_terminal_permission = None
+        self.assistant_reply_focus_active = False
+        self.assistant_reply_focus_card = None
         self.advanced_expanded = False
-        self.sidebar_pinned = False
+        self.sidebar_pinned = self.pin_panel
         self.sidebar_open = False
         self.sidebar_collapsed_width = 68
         self.sidebar_scrollbar_allowance = 24
@@ -143,16 +166,37 @@ class AgentChatWindow(QMainWindow):
 
     def load_config(self):
         default_config = {
-            "base_url": DEFAULT_SERVER_BASE_URL,
-            "base_urls": [DEFAULT_SERVER_BASE_URL],
-            "session_prompt": "",
-            "session_prompts": [],
-            "agent_terminal_enabled": True,
-            "agent_terminal_permission": TERMINAL_PERMISSION_DEFAULT,
-            "default_permissions": list(DEFAULT_TERMINAL_PERMISSIONS),
-            "temperature": 0.7,
-            "top_p": 0.9,
-            "top_k": 40,
+            "server": {
+                "enabled": True,
+                "base_url": DEFAULT_SERVER_BASE_URL,
+                "base_urls": [DEFAULT_SERVER_BASE_URL],
+            },
+            "session_prompt": {
+                "enabled": True,
+                "value": "",
+                "history": [],
+            },
+            "agent_terminal": {
+                "enabled": True,
+                "permission": TERMINAL_PERMISSION_DEFAULT,
+                "default_permissions": list(DEFAULT_TERMINAL_PERMISSIONS),
+            },
+            "sampling": {
+                "enabled": True,
+                "temperature": 0.7,
+                "top_p": 0.9,
+                "top_k": 40,
+            },
+            "assistant_rendering": {
+                "enabled": True,
+                "debounce_enabled": DEFAULT_ASSISTANT_DEBOUNCE_ENABLED,
+                "debounce_interval_ms": DEFAULT_ASSISTANT_DEBOUNCE_INTERVAL_MS,
+            },
+            "ui": {
+                "enabled": True,
+                "show_thinking": False,
+                "pin_panel": False,
+            },
         }
         if not CONFIG_PATH.exists():
             return default_config
@@ -163,20 +207,49 @@ class AgentChatWindow(QMainWindow):
             return default_config
         if not isinstance(payload, dict):
             return default_config
-        return {**default_config, **payload}
+        return self.normalize_config(payload, default_config)
 
     def save_config(self):
         payload = {
-            "base_url": self.base_url,
-            "base_urls": self.base_url_history,
-            "session_prompt": self.current_session_prompt_value(),
-            "session_prompts": self.session_prompt_history,
-            "agent_terminal_enabled": self.agent_terminal_enabled,
-            "agent_terminal_permission": self.agent_terminal_permission,
-            "default_permissions": self.default_permissions,
-            "temperature": self.temperature_spin.value() if hasattr(self, "temperature_spin") else 0.7,
-            "top_p": self.top_p_spin.value() if hasattr(self, "top_p_spin") else 0.9,
-            "top_k": self.top_k_spin.value() if hasattr(self, "top_k_spin") else 40,
+            "server": {
+                "enabled": self.server_enabled,
+                "base_url": self.base_url,
+                "base_urls": self.base_url_history,
+            },
+            "session_prompt": {
+                "enabled": self.session_prompt_enabled,
+                "value": self.current_session_prompt_value(),
+                "history": self.session_prompt_history,
+            },
+            "agent_terminal": {
+                "enabled": self.agent_terminal_enabled,
+                "permission": self.agent_terminal_permission,
+                "default_permissions": self.default_permissions,
+            },
+            "sampling": {
+                "enabled": self.sampling_enabled,
+                "temperature": self.temperature_spin.value() if hasattr(self, "temperature_spin") else 0.7,
+                "top_p": self.top_p_spin.value() if hasattr(self, "top_p_spin") else 0.9,
+                "top_k": self.top_k_spin.value() if hasattr(self, "top_k_spin") else 40,
+            },
+            "assistant_rendering": {
+                "enabled": self.assistant_rendering_enabled,
+                "debounce_enabled": self.assistant_debounce_enabled,
+                "debounce_interval_ms": (
+                    self.debounce_interval_spin.value()
+                    if hasattr(self, "debounce_interval_spin")
+                    else self.assistant_debounce_interval_ms
+                ),
+            },
+            "ui": {
+                "enabled": True,
+                "show_thinking": (
+                    self.show_thinking_checkbox.isChecked()
+                    if hasattr(self, "show_thinking_checkbox")
+                    else self.show_thinking
+                ),
+                "pin_panel": self.sidebar_pinned,
+            },
         }
         try:
             with CONFIG_PATH.open("w", encoding="utf-8") as handle:
@@ -184,6 +257,56 @@ class AgentChatWindow(QMainWindow):
                 handle.write("\n")
         except OSError as exc:
             self.set_status_message(f"Could not save config.json: {exc}")
+
+    def normalize_config(self, payload, default_config):
+        server_payload = payload.get("server") if isinstance(payload.get("server"), dict) else {}
+        session_payload = payload.get("session_prompt") if isinstance(payload.get("session_prompt"), dict) else {}
+        terminal_payload = payload.get("agent_terminal") if isinstance(payload.get("agent_terminal"), dict) else {}
+        sampling_payload = payload.get("sampling") if isinstance(payload.get("sampling"), dict) else {}
+        rendering_payload = (
+            payload.get("assistant_rendering")
+            if isinstance(payload.get("assistant_rendering"), dict)
+            else {}
+        )
+        ui_payload = payload.get("ui") if isinstance(payload.get("ui"), dict) else {}
+
+        return {
+            "server": {
+                **default_config["server"],
+                **server_payload,
+                "base_url": server_payload.get("base_url", payload.get("base_url", default_config["server"]["base_url"])),
+                "base_urls": server_payload.get("base_urls", payload.get("base_urls", default_config["server"]["base_urls"])),
+            },
+            "session_prompt": {
+                **default_config["session_prompt"],
+                **session_payload,
+                "enabled": session_payload.get("enabled", payload.get("session_prompt_enabled", default_config["session_prompt"]["enabled"])),
+                "value": session_payload.get("value", payload.get("session_prompt", default_config["session_prompt"]["value"])),
+                "history": session_payload.get("history", payload.get("session_prompts", default_config["session_prompt"]["history"])),
+            },
+            "agent_terminal": {
+                **default_config["agent_terminal"],
+                **terminal_payload,
+                "enabled": terminal_payload.get("enabled", payload.get("agent_terminal_enabled", default_config["agent_terminal"]["enabled"])),
+                "permission": terminal_payload.get("permission", payload.get("agent_terminal_permission", default_config["agent_terminal"]["permission"])),
+                "default_permissions": terminal_payload.get("default_permissions", payload.get("default_permissions", default_config["agent_terminal"]["default_permissions"])),
+            },
+            "sampling": {
+                **default_config["sampling"],
+                **sampling_payload,
+                "temperature": sampling_payload.get("temperature", payload.get("temperature", default_config["sampling"]["temperature"])),
+                "top_p": sampling_payload.get("top_p", payload.get("top_p", default_config["sampling"]["top_p"])),
+                "top_k": sampling_payload.get("top_k", payload.get("top_k", default_config["sampling"]["top_k"])),
+            },
+            "assistant_rendering": {
+                **default_config["assistant_rendering"],
+                **rendering_payload,
+            },
+            "ui": {
+                **default_config["ui"],
+                **ui_payload,
+            },
+        }
 
     def clean_history(self, values, normalizer=None):
         cleaned = []
@@ -216,6 +339,13 @@ class AgentChatWindow(QMainWindow):
             if command not in cleaned:
                 cleaned.append(command)
         return cleaned or list(DEFAULT_TERMINAL_PERMISSIONS)
+
+    def normalize_debounce_interval(self, value):
+        try:
+            interval = int(value)
+        except (TypeError, ValueError):
+            interval = DEFAULT_ASSISTANT_DEBOUNCE_INTERVAL_MS
+        return max(0, min(1000, interval))
 
     def terminal_permission_icon_path(self, permission):
         if permission == TERMINAL_PERMISSION_FULL_ACCESS:
@@ -340,9 +470,12 @@ class AgentChatWindow(QMainWindow):
 
         self.build_toast()
         self.refresh_session_prompt_ui()
+        self.refresh_rendering_ui()
         self.refresh_terminal_permission_ui()
         self.update_empty_state()
         self.update_send_availability()
+        if self.sidebar_pinned:
+            QTimer.singleShot(0, self.expand_sidebar)
 
     def build_toast(self):
         self.toast_label = QLabel("", self)
@@ -406,6 +539,10 @@ class AgentChatWindow(QMainWindow):
         self.pin_button.setObjectName("pinButton")
         self.pin_button.setToolTip("Pin panel")
         self.pin_button.toggled.connect(self.toggle_sidebar_pin)
+        self.pin_button.blockSignals(True)
+        self.pin_button.setChecked(self.sidebar_pinned)
+        self.pin_button.blockSignals(False)
+        self.pin_button.setProperty("pinned", self.sidebar_pinned)
         self.pin_button.hide()
         header_row.addWidget(self.pin_button, 0, Qt.AlignmentFlag.AlignLeft)
         header_row.addStretch()
@@ -496,37 +633,53 @@ class AgentChatWindow(QMainWindow):
         heading.setObjectName("sectionLabel")
         layout.addWidget(heading)
 
+        self.server_section = QWidget()
+        server_section_layout = QVBoxLayout(self.server_section)
+        server_section_layout.setContentsMargins(0, 0, 0, 0)
+        server_section_layout.setSpacing(10)
+
         server_heading = QLabel("Server URL")
         server_heading.setObjectName("sectionLabel")
-        layout.addWidget(server_heading)
+        server_header_row = QHBoxLayout()
+        server_header_row.setContentsMargins(0, 0, 0, 0)
+        server_header_row.setSpacing(8)
+        server_header_row.addWidget(server_heading)
+        server_header_row.addStretch()
 
-        server_row = QHBoxLayout()
-        server_row.setSpacing(8)
-
-        self.base_url_input = DeletableHistoryComboBox()
-        self.base_url_input.setEditable(True)
-        self.base_url_input.set_history_items(self.base_url_history)
-        self.base_url_input.set_history_available(bool(self.base_url_history))
-        self.base_url_input.setCurrentText(self.base_url)
-        self.base_url_input.setPlaceholderText("http://localhost:8080")
-        self.base_url_input.lineEdit().returnPressed.connect(self.apply_base_url)
-        self.base_url_input.currentTextChanged.connect(self.on_base_url_text_changed)
-        self.base_url_input.activated.connect(self.select_base_url_history_index)
-        self.base_url_input.item_delete_requested.connect(self.delete_base_url_history_item)
-        server_row.addWidget(self.base_url_input, 1)
+        self.base_url_history_button = QPushButton("▾")
+        self.base_url_history_button.setObjectName("fieldIconButton")
+        self.base_url_history_button.setToolTip("Select saved server URL")
+        self.base_url_history_button.clicked.connect(self.show_base_url_history_menu)
+        server_header_row.addWidget(self.base_url_history_button)
 
         self.apply_url_button = QPushButton("✓")
         self.apply_url_button.setObjectName("fieldIconButton")
         self.apply_url_button.setToolTip("Apply server URL")
         self.apply_url_button.setProperty("applied", True)
         self.apply_url_button.clicked.connect(self.apply_base_url)
-        server_row.addWidget(self.apply_url_button)
-        layout.addLayout(server_row)
+        server_header_row.addWidget(self.apply_url_button)
+        server_section_layout.addLayout(server_header_row)
+
+        self.base_url_input = DeletableHistoryComboBox()
+        self.base_url_input.setEditable(True)
+        self.base_url_input.set_history_available(False)
+        self.base_url_input.setCurrentText(self.base_url)
+        self.base_url_input.setPlaceholderText("http://localhost:8080")
+        self.base_url_input.lineEdit().returnPressed.connect(self.apply_base_url)
+        self.base_url_input.currentTextChanged.connect(self.on_base_url_text_changed)
+        server_section_layout.addWidget(self.base_url_input)
 
         self.base_url_detail = QLabel(f"Base URL for OpenAI-compatible server: {self.base_url}")
         self.base_url_detail.setObjectName("subtleLabel")
         self.base_url_detail.setWordWrap(True)
-        layout.addWidget(self.base_url_detail)
+        server_section_layout.addWidget(self.base_url_detail)
+        self.server_section.setVisible(self.server_enabled)
+        layout.addWidget(self.server_section)
+
+        self.session_prompt_section = QWidget()
+        session_section_layout = QVBoxLayout(self.session_prompt_section)
+        session_section_layout.setContentsMargins(0, 0, 0, 0)
+        session_section_layout.setSpacing(10)
 
         session_heading = QLabel("Session prompt")
         session_heading.setObjectName("sectionLabel")
@@ -547,7 +700,7 @@ class AgentChatWindow(QMainWindow):
         self.apply_prompt_button.setToolTip("Apply current session prompt")
         self.apply_prompt_button.clicked.connect(self.apply_session_prompt)
         session_header_row.addWidget(self.apply_prompt_button)
-        layout.addLayout(session_header_row)
+        session_section_layout.addLayout(session_header_row)
 
         self.system_prompt_input = QPlainTextEdit()
         self.system_prompt_input.setPlaceholderText("Optional instruction to lock in for this session.")
@@ -555,17 +708,17 @@ class AgentChatWindow(QMainWindow):
         if self.initial_session_prompt:
             self.system_prompt_input.setPlainText(self.initial_session_prompt)
         self.system_prompt_input.textChanged.connect(self.refresh_session_prompt_ui)
-        layout.addWidget(self.system_prompt_input)
+        session_section_layout.addWidget(self.system_prompt_input)
 
         self.session_prompt_badge = QLabel("")
         self.session_prompt_badge.setObjectName("sessionPromptBadge")
         self.session_prompt_badge.setWordWrap(True)
-        layout.addWidget(self.session_prompt_badge)
+        session_section_layout.addWidget(self.session_prompt_badge)
 
         self.session_prompt_detail = QLabel("")
         self.session_prompt_detail.setObjectName("subtleLabel")
         self.session_prompt_detail.setWordWrap(True)
-        layout.addWidget(self.session_prompt_detail)
+        session_section_layout.addWidget(self.session_prompt_detail)
 
         prompt_actions = QHBoxLayout()
         prompt_actions.setSpacing(10)
@@ -580,7 +733,9 @@ class AgentChatWindow(QMainWindow):
         self.clear_prompt_button.clicked.connect(self.clear_session_prompt_text)
         prompt_actions.addWidget(self.clear_prompt_button)
         prompt_actions.addStretch()
-        layout.addLayout(prompt_actions)
+        session_section_layout.addLayout(prompt_actions)
+        self.session_prompt_section.setVisible(self.session_prompt_enabled)
+        layout.addWidget(self.session_prompt_section)
 
         thinking_row = QHBoxLayout()
         thinking_row.setSpacing(10)
@@ -590,11 +745,44 @@ class AgentChatWindow(QMainWindow):
         thinking_row.addWidget(thinking_label)
 
         self.show_thinking_checkbox = QCheckBox("Show thinking")
-        self.show_thinking_checkbox.setChecked(False)
+        self.show_thinking_checkbox.setChecked(self.show_thinking)
         self.show_thinking_checkbox.toggled.connect(self.update_thinking_visibility)
         thinking_row.addWidget(self.show_thinking_checkbox)
         thinking_row.addStretch()
         layout.addLayout(thinking_row)
+
+        self.assistant_rendering_section = QWidget()
+        rendering_section_layout = QVBoxLayout(self.assistant_rendering_section)
+        rendering_section_layout.setContentsMargins(0, 0, 0, 0)
+        rendering_section_layout.setSpacing(10)
+
+        rendering_heading = QLabel("Assistant rendering")
+        rendering_heading.setObjectName("sectionLabel")
+        rendering_section_layout.addWidget(rendering_heading)
+
+        debounce_row = QHBoxLayout()
+        debounce_row.setSpacing(10)
+
+        self.debounce_checkbox = QCheckBox("Debounce streaming")
+        self.debounce_checkbox.setChecked(self.assistant_debounce_enabled)
+        self.debounce_checkbox.toggled.connect(self.set_assistant_debounce_enabled)
+        debounce_row.addWidget(self.debounce_checkbox)
+
+        self.debounce_interval_spin = QSpinBox()
+        self.debounce_interval_spin.setRange(0, 1000)
+        self.debounce_interval_spin.setSuffix(" ms")
+        self.debounce_interval_spin.setValue(self.assistant_debounce_interval_ms)
+        self.debounce_interval_spin.valueChanged.connect(self.set_assistant_debounce_interval)
+        debounce_row.addWidget(self.debounce_interval_spin)
+        debounce_row.addStretch()
+        rendering_section_layout.addLayout(debounce_row)
+        self.assistant_rendering_section.setVisible(self.assistant_rendering_enabled)
+        layout.addWidget(self.assistant_rendering_section)
+
+        self.agent_terminal_section = QWidget()
+        terminal_section_layout = QVBoxLayout(self.agent_terminal_section)
+        terminal_section_layout.setContentsMargins(0, 0, 0, 0)
+        terminal_section_layout.setSpacing(10)
 
         terminal_row = QHBoxLayout()
         terminal_row.setSpacing(10)
@@ -608,7 +796,7 @@ class AgentChatWindow(QMainWindow):
         self.agent_terminal_checkbox.toggled.connect(self.set_agent_terminal_enabled)
         terminal_row.addWidget(self.agent_terminal_checkbox)
         terminal_row.addStretch()
-        layout.addLayout(terminal_row)
+        terminal_section_layout.addLayout(terminal_row)
 
         self.agent_terminal_permission_combo = QComboBox()
         self.agent_terminal_permission_combo.addItem(
@@ -625,12 +813,19 @@ class AgentChatWindow(QMainWindow):
             1 if self.agent_terminal_permission == TERMINAL_PERMISSION_FULL_ACCESS else 0
         )
         self.agent_terminal_permission_combo.currentIndexChanged.connect(self.on_agent_terminal_permission_changed)
-        layout.addWidget(self.agent_terminal_permission_combo)
+        terminal_section_layout.addWidget(self.agent_terminal_permission_combo)
 
         self.default_permissions_detail = QLabel("")
         self.default_permissions_detail.setObjectName("subtleLabel")
         self.default_permissions_detail.setWordWrap(True)
-        layout.addWidget(self.default_permissions_detail)
+        terminal_section_layout.addWidget(self.default_permissions_detail)
+        self.agent_terminal_section.setVisible(self.agent_terminal_enabled)
+        layout.addWidget(self.agent_terminal_section)
+
+        self.sampling_section = QWidget()
+        sampling_section_layout = QVBoxLayout(self.sampling_section)
+        sampling_section_layout.setContentsMargins(0, 0, 0, 0)
+        sampling_section_layout.setSpacing(10)
 
         preset_row = QHBoxLayout()
         preset_row.setSpacing(10)
@@ -650,7 +845,16 @@ class AgentChatWindow(QMainWindow):
         self.creative_button.clicked.connect(lambda: self.apply_preset("creative"))
         preset_row.addWidget(self.creative_button)
         preset_row.addStretch()
-        layout.addLayout(preset_row)
+        sampling_section_layout.addLayout(preset_row)
+
+        sampling_header_row = QHBoxLayout()
+        sampling_header_row.setContentsMargins(0, 0, 0, 0)
+        sampling_header_row.setSpacing(10)
+        sampling_label = QLabel("Sampling")
+        sampling_label.setObjectName("sectionLabel")
+        sampling_header_row.addWidget(sampling_label)
+        sampling_header_row.addStretch()
+        sampling_section_layout.addLayout(sampling_header_row)
 
         sampling_layout = QFormLayout()
         sampling_layout.setSpacing(12)
@@ -660,7 +864,7 @@ class AgentChatWindow(QMainWindow):
         self.temperature_spin.setRange(0.0, 2.0)
         self.temperature_spin.setDecimals(2)
         self.temperature_spin.setSingleStep(0.05)
-        self.temperature_spin.setValue(float(self.config.get("temperature", 0.7)))
+        self.temperature_spin.setValue(float(self.config.get("sampling", {}).get("temperature", 0.7)))
         self.temperature_spin.valueChanged.connect(lambda _value: self.save_config())
         sampling_layout.addRow("Temperature", self.temperature_spin)
 
@@ -668,16 +872,18 @@ class AgentChatWindow(QMainWindow):
         self.top_p_spin.setRange(0.0, 1.0)
         self.top_p_spin.setDecimals(2)
         self.top_p_spin.setSingleStep(0.05)
-        self.top_p_spin.setValue(float(self.config.get("top_p", 0.9)))
+        self.top_p_spin.setValue(float(self.config.get("sampling", {}).get("top_p", 0.9)))
         self.top_p_spin.valueChanged.connect(lambda _value: self.save_config())
         sampling_layout.addRow("Top P", self.top_p_spin)
 
         self.top_k_spin = QSpinBox()
         self.top_k_spin.setRange(1, 200)
-        self.top_k_spin.setValue(int(self.config.get("top_k", 40)))
+        self.top_k_spin.setValue(int(self.config.get("sampling", {}).get("top_k", 40)))
         self.top_k_spin.valueChanged.connect(lambda _value: self.save_config())
         sampling_layout.addRow("Top K", self.top_k_spin)
-        layout.addLayout(sampling_layout)
+        sampling_section_layout.addLayout(sampling_layout)
+        self.sampling_section.setVisible(self.sampling_enabled)
+        layout.addWidget(self.sampling_section)
 
         return frame
 
@@ -858,6 +1064,44 @@ class AgentChatWindow(QMainWindow):
             self.top_k_spin.setValue(40)
         self.show_toast(f"{preset.title()} preset applied")
 
+    def set_session_prompt_enabled(self, enabled):
+        self.session_prompt_enabled = bool(enabled)
+        self.save_config()
+        self.refresh_session_prompt_ui()
+        self.set_status_message(
+            "Session prompt enabled."
+            if self.session_prompt_enabled
+            else "Session prompt disabled."
+        )
+
+    def set_assistant_debounce_enabled(self, enabled):
+        self.assistant_debounce_enabled = bool(enabled)
+        self.save_config()
+        self.refresh_rendering_ui()
+        self.set_status_message(
+            "Assistant render debounce enabled."
+            if self.assistant_debounce_enabled
+            else "Assistant render debounce disabled."
+        )
+
+    def set_assistant_debounce_interval(self, value):
+        self.assistant_debounce_interval_ms = self.normalize_debounce_interval(value)
+        self.save_config()
+        self.refresh_rendering_ui()
+
+    def refresh_rendering_ui(self):
+        if hasattr(self, "debounce_checkbox"):
+            self.debounce_checkbox.blockSignals(True)
+            self.debounce_checkbox.setChecked(self.assistant_debounce_enabled)
+            self.debounce_checkbox.blockSignals(False)
+        if hasattr(self, "debounce_interval_spin"):
+            self.debounce_interval_spin.blockSignals(True)
+            self.debounce_interval_spin.setValue(self.assistant_debounce_interval_ms)
+            self.debounce_interval_spin.setEnabled(self.assistant_debounce_enabled)
+            self.debounce_interval_spin.blockSignals(False)
+        if hasattr(self, "assistant_rendering_section"):
+            self.assistant_rendering_section.setVisible(self.assistant_rendering_enabled)
+
     def set_agent_terminal_enabled(self, enabled):
         self.agent_terminal_enabled = bool(enabled)
         if not self.agent_terminal_enabled and self.pending_terminal_permission and self.worker is not None:
@@ -937,6 +1181,8 @@ class AgentChatWindow(QMainWindow):
         if hasattr(self, "default_permissions_detail"):
             allowed = ", ".join(self.default_permissions)
             self.default_permissions_detail.setText(f"Default commands: {allowed}")
+        if hasattr(self, "agent_terminal_section"):
+            self.agent_terminal_section.setVisible(self.agent_terminal_enabled)
 
     def detect_attachment_type(self, path):
         mime_type, _ = mimetypes.guess_type(path)
@@ -1296,9 +1542,11 @@ class AgentChatWindow(QMainWindow):
 
     def toggle_sidebar_pin(self, checked):
         self.sidebar_pinned = checked
+        self.pin_panel = checked
         self.pin_button.setProperty("pinned", checked)
         self.pin_button.style().unpolish(self.pin_button)
         self.pin_button.style().polish(self.pin_button)
+        self.save_config()
         if checked:
             self.expand_sidebar()
         else:
@@ -1415,11 +1663,13 @@ class AgentChatWindow(QMainWindow):
         self.apply_url_button.setEnabled(bool(current))
         self.apply_url_button.style().unpolish(self.apply_url_button)
         self.apply_url_button.style().polish(self.apply_url_button)
+        if hasattr(self, "base_url_history_button"):
+            self.base_url_history_button.setEnabled(bool(self.base_url_history))
 
     def refresh_base_url_history_ui(self):
-        self.base_url_input.set_history_items(self.base_url_history)
         self.base_url_input.setCurrentText(self.base_url)
-        self.base_url_input.set_history_available(bool(self.base_url_history))
+        self.base_url_input.set_history_available(False)
+        self.update_base_url_input_state()
 
     def refresh_session_prompt_history_ui(self):
         if hasattr(self, "session_prompt_history_button"):
@@ -1434,7 +1684,7 @@ class AgentChatWindow(QMainWindow):
         if not value:
             return
         self.base_url_input.setCurrentText(value)
-        self.apply_base_url()
+        self.update_base_url_input_state()
 
     def delete_base_url_history_item(self, value):
         value = self.normalize_base_url(value)
@@ -1446,6 +1696,27 @@ class AgentChatWindow(QMainWindow):
             self.base_url_detail.setText(f"Base URL for OpenAI-compatible server: {self.base_url}")
         self.refresh_base_url_history_ui()
         self.save_config()
+
+    def show_base_url_history_menu(self):
+        current = self.normalize_base_url(self.base_url_input.currentText())
+        if not self.base_url_history:
+            return
+
+        menu = QMenu(self)
+        menu.setObjectName("historyMenu")
+        for value in self.base_url_history:
+            action = menu.addAction(value)
+            is_current = self.normalize_base_url(value) == current
+            action.setEnabled(not is_current)
+            if not is_current:
+                action.triggered.connect(lambda _checked=False, url=value: self.select_base_url_history(url))
+
+        delete_menu = menu.addMenu("Delete saved URL")
+        for value in self.base_url_history:
+            action = delete_menu.addAction(value)
+            action.triggered.connect(lambda _checked=False, url=value: self.delete_base_url_history_item(url))
+
+        menu.exec(self.base_url_history_button.mapToGlobal(self.base_url_history_button.rect().bottomLeft()))
 
     def select_session_prompt_history(self, value):
         if self.session_prompt_locked:
@@ -1467,13 +1738,18 @@ class AgentChatWindow(QMainWindow):
         if not self.session_prompt_history:
             return
 
+        current = self.current_session_prompt_value()
         menu = QMenu(self)
+        menu.setObjectName("historyMenu")
         for value in self.session_prompt_history:
             display_value = " ".join(value.split())
             if len(display_value) > 90:
                 display_value = display_value[:87] + "..."
             action = menu.addAction(display_value)
-            action.triggered.connect(lambda _checked=False, prompt=value: self.select_session_prompt_history(prompt))
+            is_current = value == current
+            action.setEnabled(not is_current)
+            if not is_current:
+                action.triggered.connect(lambda _checked=False, prompt=value: self.select_session_prompt_history(prompt))
 
         delete_menu = menu.addMenu("Delete saved prompt")
         for value in self.session_prompt_history:
@@ -1623,6 +1899,7 @@ class AgentChatWindow(QMainWindow):
             retry_text=submission["user_text"],
         )
         self.current_assistant_card.start_loading()
+        self.start_assistant_reply_focus(self.current_assistant_card)
 
         queue_count = len(self.message_queue)
         suffix = f" {queue_count} queued." if queue_count else ""
@@ -1667,6 +1944,9 @@ class AgentChatWindow(QMainWindow):
         return bool(self.history)
 
     def apply_session_prompt(self):
+        if not self.session_prompt_enabled:
+            self.set_status_message("Enable session prompt before applying it.")
+            return
         if self.has_session_messages() or (self.worker is not None and self.worker.isRunning()):
             self.set_status_message("Start a new session before changing the active session prompt.")
             return
@@ -1683,6 +1963,11 @@ class AgentChatWindow(QMainWindow):
 
     def lock_session_prompt_if_needed(self):
         if self.session_prompt_locked:
+            return
+        if not self.session_prompt_enabled:
+            self.session_system_prompt = ""
+            self.session_prompt_locked = False
+            self.refresh_session_prompt_ui()
             return
         self.session_system_prompt = self.system_prompt_input.toPlainText().strip()
         if self.session_system_prompt:
@@ -1716,14 +2001,19 @@ class AgentChatWindow(QMainWindow):
     def refresh_session_prompt_ui(self):
         draft_text = self.system_prompt_input.toPlainText().strip()
         active_text = self.session_system_prompt if self.session_prompt_locked else draft_text
+        if not self.session_prompt_enabled:
+            active_text = ""
         preview = active_text if active_text else "No session prompt"
         if len(preview) > 140:
             preview = preview[:137] + "..."
 
         self.system_prompt_input.setReadOnly(self.session_prompt_locked)
+        self.system_prompt_input.setEnabled(self.session_prompt_enabled)
         self.session_prompt_badge.setText(preview)
 
-        if self.session_prompt_locked:
+        if not self.session_prompt_enabled:
+            self.session_prompt_detail.setText("Session prompt group is disabled.")
+        elif self.session_prompt_locked:
             self.session_prompt_detail.setText(
                 "Locked for the current session. Start a new session to change it."
             )
@@ -1737,11 +2027,13 @@ class AgentChatWindow(QMainWindow):
             )
 
         self.unlock_prompt_button.setVisible(self.session_prompt_locked)
-        self.clear_prompt_button.setEnabled(bool(draft_text) and not self.session_prompt_locked)
-        self.apply_prompt_button.setEnabled(bool(draft_text) and not self.session_prompt_locked)
+        self.clear_prompt_button.setEnabled(bool(draft_text) and self.session_prompt_enabled and not self.session_prompt_locked)
+        self.apply_prompt_button.setEnabled(bool(draft_text) and self.session_prompt_enabled and not self.session_prompt_locked)
         self.apply_prompt_button.setProperty("applied", self.session_prompt_locked)
         self.apply_prompt_button.style().unpolish(self.apply_prompt_button)
         self.apply_prompt_button.style().polish(self.apply_prompt_button)
+        if hasattr(self, "session_prompt_section"):
+            self.session_prompt_section.setVisible(self.session_prompt_enabled)
         self.refresh_session_prompt_history_ui()
 
     def build_user_message(self, user_text, attachments, url_inputs=None):
@@ -1798,7 +2090,7 @@ class AgentChatWindow(QMainWindow):
 
     def build_messages_payload(self, user_message):
         messages = []
-        if self.session_system_prompt:
+        if self.session_prompt_enabled and self.session_system_prompt:
             messages.append({"role": "system", "content": self.session_system_prompt})
         if self.agent_terminal_enabled:
             messages.append({"role": "system", "content": AGENT_TERMINAL_PROMPT})
@@ -1842,20 +2134,25 @@ class AgentChatWindow(QMainWindow):
         self.update_send_availability()
 
     def on_token_received(self, token):
+        should_focus_reply = self.assistant_reply_focus_active
         if self.current_assistant_card is not None:
             self.current_assistant_card.stop_loading()
             if not self.current_assistant_card.raw_text:
                 self.current_assistant_card.update_text(token)
             else:
                 self.current_assistant_card.append_text(token)
-        self.scroll_to_bottom()
+        if should_focus_reply:
+            self.scroll_to_assistant_reply()
 
     def on_thinking_received(self, token):
+        should_focus_reply = self.assistant_reply_focus_active
         if self.current_assistant_card is not None:
             self.current_assistant_card.append_thinking(token, self.show_thinking_checkbox.isChecked())
-        self.scroll_to_bottom()
+        if should_focus_reply:
+            self.scroll_to_assistant_reply()
 
     def on_terminal_permission_requested(self, command, command_key):
+        should_focus_reply = self.assistant_reply_focus_active
         self.pending_terminal_permission = {
             "command": command,
             "command_key": command_key,
@@ -1870,7 +2167,8 @@ class AgentChatWindow(QMainWindow):
         self.terminal_approval_banner.show()
         self.status_badge.setText("Permission needed")
         self.status_detail.setText("Terminal command is waiting for approval.")
-        self.scroll_to_bottom()
+        if should_focus_reply:
+            self.scroll_to_assistant_reply()
 
     def resolve_terminal_permission(self, decision):
         if not self.pending_terminal_permission:
@@ -1893,25 +2191,33 @@ class AgentChatWindow(QMainWindow):
             self.status_detail.setText("Terminal command approved.")
 
     def on_terminal_command_started(self, command, shell_name):
+        should_focus_reply = self.assistant_reply_focus_active
         if self.current_assistant_card is not None:
             self.current_assistant_card.stop_loading()
             self.current_assistant_card.start_terminal_command(command, shell_name)
-        self.scroll_to_bottom()
+        if should_focus_reply:
+            self.scroll_to_assistant_reply()
 
     def on_terminal_log_received(self, text):
+        should_focus_reply = self.assistant_reply_focus_active
         if self.current_assistant_card is not None:
             self.current_assistant_card.stop_loading()
             self.current_assistant_card.append_terminal_log(text)
-        self.scroll_to_bottom()
+        if should_focus_reply:
+            self.scroll_to_assistant_reply()
 
     def on_terminal_command_finished(self, status):
+        should_focus_reply = self.assistant_reply_focus_active
         if self.current_assistant_card is not None:
             self.current_assistant_card.finish_terminal_command(status)
-        self.scroll_to_bottom()
+        if should_focus_reply:
+            self.scroll_to_assistant_reply()
 
     def on_generation_finished(self, success, stopped, full_response, _full_thinking):
         if self.current_assistant_card is not None:
+            self.current_assistant_card.flush_pending_render()
             self.current_assistant_card.stop_loading()
+        self.stop_assistant_reply_focus()
         if hasattr(self, "terminal_approval_banner"):
             self.terminal_approval_banner.hide()
         self.pending_terminal_permission = None
@@ -1941,6 +2247,7 @@ class AgentChatWindow(QMainWindow):
         self.composer.setFocus()
 
     def on_error(self, message):
+        self.stop_assistant_reply_focus()
         if hasattr(self, "terminal_approval_banner"):
             self.terminal_approval_banner.hide()
         self.pending_terminal_permission = None
@@ -1950,6 +2257,7 @@ class AgentChatWindow(QMainWindow):
         self.process_next_queued_message()
 
     def stop_generation(self):
+        self.stop_assistant_reply_focus()
         if self.pending_terminal_permission and self.worker is not None:
             self.worker.resolve_terminal_permission("reject")
         if hasattr(self, "terminal_approval_banner"):
@@ -1966,6 +2274,8 @@ class AgentChatWindow(QMainWindow):
             timestamp=timestamp,
             retry_text=retry_text,
             attachments=attachments,
+            render_debounce_enabled=self.assistant_debounce_enabled,
+            render_debounce_interval_ms=self.assistant_debounce_interval_ms,
         )
         card.retry_requested.connect(self.retry_message)
         card.image_preview_requested.connect(self.open_message_image_gallery)
@@ -1987,6 +2297,8 @@ class AgentChatWindow(QMainWindow):
 
     def update_thinking_visibility(self, *_args):
         visible = self.show_thinking_checkbox.isChecked()
+        self.show_thinking = visible
+        self.save_config()
         for index in range(self.messages_layout.count()):
             item = self.messages_layout.itemAt(index)
             widget = item.widget()
@@ -2035,7 +2347,46 @@ class AgentChatWindow(QMainWindow):
             QEvent.Type.Show,
         ):
             QTimer.singleShot(0, self.update_sticky_code_header)
+        if (
+            self.assistant_reply_focus_active
+            and watched in (self.scroll_area.viewport(), self.scroll_area.verticalScrollBar())
+            and event.type() in (
+                QEvent.Type.Wheel,
+                QEvent.Type.MouseButtonPress,
+                QEvent.Type.MouseButtonDblClick,
+                QEvent.Type.KeyPress,
+            )
+        ):
+            self.stop_assistant_reply_focus()
         return super().eventFilter(watched, event)
+
+    def start_assistant_reply_focus(self, card):
+        self.assistant_reply_focus_card = card
+        self.assistant_reply_focus_active = True
+        self.scroll_to_assistant_reply()
+
+    def stop_assistant_reply_focus(self):
+        self.assistant_reply_focus_active = False
+        self.assistant_reply_focus_card = None
+
+    def scroll_to_assistant_reply(self):
+        card = self.assistant_reply_focus_card
+        if card is None:
+            return
+
+        def apply_scroll():
+            if not self.assistant_reply_focus_active or self.assistant_reply_focus_card is not card:
+                return
+            scrollbar = self.scroll_area.verticalScrollBar()
+            top = card.mapTo(self.chat_surface, QPoint(0, 0)).y()
+            target = max(0, top - self.chat_layout.contentsMargins().top())
+            scrollbar.setValue(min(target, scrollbar.maximum()))
+
+        QTimer.singleShot(0, apply_scroll)
+
+    def is_chat_scrolled_to_bottom(self, threshold=24):
+        scrollbar = self.scroll_area.verticalScrollBar()
+        return scrollbar.maximum() - scrollbar.value() <= threshold
 
     def scroll_to_bottom(self):
         QTimer.singleShot(
@@ -2057,6 +2408,7 @@ class AgentChatWindow(QMainWindow):
         self.pending_user_text = None
         self.pending_user_message = None
         self.pending_terminal_permission = None
+        self.stop_assistant_reply_focus()
         if hasattr(self, "terminal_approval_banner"):
             self.terminal_approval_banner.hide()
         self.message_queue = []

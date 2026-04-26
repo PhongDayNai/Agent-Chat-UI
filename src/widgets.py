@@ -1154,7 +1154,17 @@ class MessageCard(QFrame):
     image_preview_requested = pyqtSignal(list, int)
     file_preview_requested = pyqtSignal(str)
 
-    def __init__(self, role, text="", timestamp=None, retry_text=None, attachments=None, parent=None):
+    def __init__(
+        self,
+        role,
+        text="",
+        timestamp=None,
+        retry_text=None,
+        attachments=None,
+        render_debounce_enabled=True,
+        render_debounce_interval_ms=45,
+        parent=None,
+    ):
         super().__init__(parent)
         self.role = role
         self.raw_text = text
@@ -1168,6 +1178,10 @@ class MessageCard(QFrame):
         self.current_terminal_block = None
         self.post_body = None
         self.post_body_layout = None
+        self.pending_render_text = None
+        self.render_timer = None
+        self.render_debounce_enabled = bool(render_debounce_enabled)
+        self.render_debounce_interval_ms = max(0, int(render_debounce_interval_ms))
 
         self.setObjectName("messageCard")
         self.setProperty("user", role == "user")
@@ -1245,6 +1259,10 @@ class MessageCard(QFrame):
             self.loading_timer = QTimer(self)
             self.loading_timer.setInterval(320)
             self.loading_timer.timeout.connect(self.advance_loading_frame)
+            self.render_timer = QTimer(self)
+            self.render_timer.setSingleShot(True)
+            self.render_timer.setInterval(self.render_debounce_interval_ms)
+            self.render_timer.timeout.connect(self.flush_pending_render)
         else:
             self.body = AutoHeightTextBrowser()
             self.body.document().setDefaultStyleSheet(MARKDOWN_STYLESHEET)
@@ -1277,6 +1295,9 @@ class MessageCard(QFrame):
     def update_text(self, text):
         self.raw_text = text
         if self.role == "assistant":
+            self.pending_render_text = None
+            if self.render_timer is not None and self.render_timer.isActive():
+                self.render_timer.stop()
             self.render_assistant_message_text(text)
         else:
             self.body.setHtml(html_text_with_links(text))
@@ -1292,6 +1313,13 @@ class MessageCard(QFrame):
                 self.render_assistant_content(self.post_body_layout, post_text)
             else:
                 self.clear_layout(self.post_body_layout)
+
+    def flush_pending_render(self):
+        if self.role != "assistant" or self.pending_render_text is None:
+            return
+        text = self.pending_render_text
+        self.pending_render_text = None
+        self.render_assistant_message_text(text)
 
     def render_assistant_content(self, layout, text):
         if layout is None:
@@ -1407,6 +1435,14 @@ class MessageCard(QFrame):
         self.attachments_widget.show()
 
     def append_text(self, token):
+        if self.role == "assistant" and self.render_debounce_enabled and self.render_timer is not None:
+            self.raw_text += token
+            self.pending_render_text = self.raw_text
+            if self.render_debounce_interval_ms <= 0:
+                self.flush_pending_render()
+            elif not self.render_timer.isActive():
+                self.render_timer.start()
+            return
         self.update_text(self.raw_text + token)
 
     def start_terminal_command(self, command, shell_name):

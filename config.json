@@ -1,32 +1,53 @@
 {
-  "base_url": "http://localhost:8080",
-  "base_urls": [
-    "http://localhost:8080"
-  ],
-  "session_prompt": "Trả lời bằng tiếng Việt",
-  "session_prompts": [
-    "Trả lời bằng tiếng Việt"
-  ],
-  "agent_terminal_enabled": true,
-  "agent_terminal_permission": "default",
-  "default_permissions": [
-    "pwd",
-    "ls",
-    "find",
-    "rg",
-    "grep",
-    "cat",
-    "sed",
-    "head",
-    "tail",
-    "wc",
-    "file",
-    "stat",
-    "date",
-    "whoami",
-    "uname"
-  ],
-  "temperature": 0.7,
-  "top_p": 0.9,
-  "top_k": 40
+  "server": {
+    "enabled": true,
+    "base_url": "http://localhost:8080",
+    "base_urls": [
+      "http://localhost:8080"
+    ]
+  },
+  "session_prompt": {
+    "enabled": true,
+    "value": "Trả lời bằng tiếng Việt",
+    "history": [
+      "Trả lời bằng tiếng Việt"
+    ]
+  },
+  "agent_terminal": {
+    "enabled": true,
+    "permission": "full_access",
+    "default_permissions": [
+      "pwd",
+      "ls",
+      "find",
+      "rg",
+      "grep",
+      "cat",
+      "sed",
+      "head",
+      "tail",
+      "wc",
+      "file",
+      "stat",
+      "date",
+      "whoami",
+      "uname"
+    ]
+  },
+  "sampling": {
+    "enabled": false,
+    "temperature": 0.7,
+    "top_p": 0.9,
+    "top_k": 40
+  },
+  "assistant_rendering": {
+    "enabled": true,
+    "debounce_enabled": false,
+    "debounce_interval_ms": 45
+  },
+  "ui": {
+    "enabled": true,
+    "show_thinking": false,
+    "pin_panel": true
+  }
 }

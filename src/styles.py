@@ -546,6 +546,31 @@ QToolTip {
     padding: 8px 10px;
     font-size: 10pt;
 }
+QMenu#historyMenu {
+    background: #151719;
+    border: 1px solid #2a2d30;
+    border-radius: 10px;
+    padding: 6px;
+}
+QMenu#historyMenu::item {
+    background: transparent;
+    color: #d8dadd;
+    padding: 7px 28px 7px 10px;
+    border-radius: 7px;
+}
+QMenu#historyMenu::item:selected {
+    background: #202326;
+    color: #ffffff;
+}
+QMenu#historyMenu::item:disabled {
+    background: #090b0d;
+    color: #f4f5f6;
+}
+QMenu#historyMenu::separator {
+    height: 1px;
+    background: #2a2d30;
+    margin: 6px 4px;
+}
 QPlainTextEdit#composerInput {
     background: transparent;
     border: none;
