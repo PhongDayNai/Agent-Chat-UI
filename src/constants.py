@@ -15,6 +15,7 @@ ARROW_UP_ICON_PATH = ASSETS_DIR / "ic_arrow_up.svg"
 STOP_ICON_PATH = ASSETS_DIR / "ic_stop.svg"
 COPY_ICON_PATH = ASSETS_DIR / "ic_copy.svg"
 RETRY_ICON_PATH = ASSETS_DIR / "ic_retry.svg"
+ARROW_RIGHT_ICON_PATH = ASSETS_DIR / "ic_arrow_right.svg"
 CLIPBOARD_IMAGE_DIR = Path(tempfile.gettempdir()) / "agent_chat_ui_clipboard"
 TEXT_PREVIEW_SUFFIXES = {
     ".txt", ".md", ".json", ".csv", ".py", ".kt", ".js", ".ts", ".tsx", ".jsx",

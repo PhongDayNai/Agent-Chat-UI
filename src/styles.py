@@ -373,6 +373,70 @@ QFrame#messageCard[system="true"] {
     background: #181a1c;
     border-color: #33373b;
 }
+QFrame#terminalRunBlock {
+    background: transparent;
+    border: none;
+}
+QFrame#terminalHeaderLine {
+    background: #2a2d30;
+    min-height: 1px;
+    max-height: 1px;
+}
+QFrame#terminalPanel {
+    background: #090b0d;
+    border: 1px solid #2a2f35;
+    border-radius: 10px;
+}
+QPushButton#terminalRunButton {
+    background: transparent;
+    border: none;
+    color: #d8dde3;
+    font-size: 10pt;
+    font-weight: 700;
+    padding: 5px 4px;
+    text-align: left;
+}
+QPushButton#terminalRunButton:hover {
+    color: #ffffff;
+}
+QPushButton#terminalArrowButton {
+    min-width: 26px;
+    max-width: 26px;
+    min-height: 26px;
+    max-height: 26px;
+    padding: 0;
+    border: none;
+    background: transparent;
+    color: #d8dde3;
+}
+QPushButton#terminalArrowButton:hover {
+    background: #202326;
+    color: #ffffff;
+}
+QLabel#terminalShell {
+    color: #d8dde3;
+    font-size: 9.5pt;
+    font-weight: 800;
+}
+QLabel#terminalCommand {
+    color: #f1f5f9;
+    font-family: "IBM Plex Mono", "Consolas", monospace;
+    font-size: 10pt;
+}
+QLabel#terminalStatus {
+    color: #8c9298;
+    font-size: 9pt;
+}
+QPlainTextEdit#terminalLog {
+    background: #090b0d;
+    border: 1px solid #1d2329;
+    border-radius: 8px;
+    color: #dbe7f3;
+    padding: 8px;
+    font-family: "IBM Plex Mono", "Consolas", monospace;
+    font-size: 10pt;
+    selection-background-color: #2b4c6f;
+}
 QLabel#roleLabel {
     font-size: 10pt;
     font-weight: 600;

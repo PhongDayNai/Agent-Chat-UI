@@ -7,7 +7,7 @@ from math import ceil
 from pathlib import Path
 from urllib.parse import unquote
 
-from PyQt6.QtCore import QByteArray, QEvent, QRectF, QTimer, QUrl, Qt, pyqtSignal
+from PyQt6.QtCore import QByteArray, QEasingCurve, QEvent, QPropertyAnimation, QRectF, QTimer, QUrl, Qt, pyqtSignal
 from PyQt6.QtGui import (
     QColor,
     QDesktopServices,
@@ -19,6 +19,7 @@ from PyQt6.QtGui import (
     QPixmap,
     QSyntaxHighlighter,
     QTextCharFormat,
+    QTextCursor,
     QTextOption,
 )
 from PyQt6.QtSvg import QSvgRenderer
@@ -40,7 +41,14 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from constants import CODE_STICKY_CONTENT_PADDING, CODE_STICKY_HEADER_HEIGHT, COPY_ICON_PATH, PIN_ICON_PATH, RETRY_ICON_PATH
+from constants import (
+    ARROW_RIGHT_ICON_PATH,
+    CODE_STICKY_CONTENT_PADDING,
+    CODE_STICKY_HEADER_HEIGHT,
+    COPY_ICON_PATH,
+    PIN_ICON_PATH,
+    RETRY_ICON_PATH,
+)
 from markdown_utils import html_text_with_links, prepare_assistant_html, render_latexish_text, split_markdown_code_segments
 from styles import MARKDOWN_STYLESHEET
 
@@ -192,6 +200,30 @@ class SvgActionButton(QPushButton):
         svg = self._svg_template.replace("currentColor", color)
         renderer = QSvgRenderer(QByteArray(svg.encode("utf-8")))
         target = QRectF(self.rect().adjusted(8, 8, -8, -8))
+        renderer.render(painter, target)
+
+class RotatingSvgButton(SvgActionButton):
+    def __init__(self, icon_path=None, parent=None):
+        super().__init__(icon_path, parent)
+        self.rotation_degrees = 0
+
+    def set_rotation(self, degrees):
+        self.rotation_degrees = degrees
+        self.update()
+
+    def paintEvent(self, event):
+        QPushButton.paintEvent(self, event)
+        if not self._svg_template:
+            return
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        color = self.palette().buttonText().color().name()
+        svg = self._svg_template.replace("currentColor", color)
+        renderer = QSvgRenderer(QByteArray(svg.encode("utf-8")))
+        target = QRectF(self.rect().adjusted(8, 8, -8, -8))
+        painter.translate(target.center())
+        painter.rotate(self.rotation_degrees)
+        painter.translate(-target.center())
         renderer.render(painter, target)
 
 class AutoResizingTextEdit(QPlainTextEdit):
@@ -698,6 +730,157 @@ class FilePreviewDialog(QDialog):
     def open_externally(self):
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(self.path)))
 
+class TerminalCommandBlock(QFrame):
+    def __init__(self, command, shell_name="Bash", parent=None):
+        super().__init__(parent)
+        self.command = command
+        self.shell_name = shell_name
+        self.expanded = True
+        self.panel_animation = None
+        self.run_label = "Running"
+
+        self.setObjectName("terminalRunBlock")
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+
+        header = QHBoxLayout()
+        header.setContentsMargins(0, 0, 0, 0)
+        header.setSpacing(4)
+
+        self.toggle_button = QPushButton()
+        self.toggle_button.setObjectName("terminalRunButton")
+        self.toggle_button.setToolTip(command)
+        self.toggle_button.clicked.connect(self.toggle_expanded)
+        header.addWidget(self.toggle_button, 0)
+
+        self.arrow_button = RotatingSvgButton(ARROW_RIGHT_ICON_PATH)
+        self.arrow_button.setObjectName("terminalArrowButton")
+        self.arrow_button.setToolTip(command)
+        self.arrow_button.clicked.connect(self.toggle_expanded)
+        header.addWidget(self.arrow_button)
+        header.addStretch()
+        layout.addLayout(header)
+
+        line = QFrame()
+        line.setObjectName("terminalHeaderLine")
+        layout.addWidget(line)
+
+        self.panel = QFrame()
+        self.panel.setObjectName("terminalPanel")
+        panel_layout = QVBoxLayout(self.panel)
+        panel_layout.setContentsMargins(12, 12, 12, 12)
+        panel_layout.setSpacing(10)
+
+        shell_row = QHBoxLayout()
+        shell_row.setContentsMargins(0, 0, 0, 0)
+        shell_row.setSpacing(8)
+
+        self.shell_label = QLabel(shell_name)
+        self.shell_label.setObjectName("terminalShell")
+        shell_row.addWidget(self.shell_label)
+
+        self.status_label = QLabel("running")
+        self.status_label.setObjectName("terminalStatus")
+        shell_row.addWidget(self.status_label)
+        shell_row.addStretch()
+        panel_layout.addLayout(shell_row)
+
+        command_row = QHBoxLayout()
+        command_row.setContentsMargins(0, 0, 0, 0)
+        command_row.setSpacing(10)
+
+        self.command_label = QLabel(command)
+        self.command_label.setObjectName("terminalCommand")
+        self.command_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.command_label.setWordWrap(True)
+        command_row.addWidget(self.command_label, 1)
+
+        self.copy_command_button = SvgActionButton(COPY_ICON_PATH)
+        self.copy_command_button.setObjectName("messageIconButton")
+        self.copy_command_button.setToolTip("Copy command")
+        self.copy_command_button.clicked.connect(self.copy_command)
+        command_row.addWidget(self.copy_command_button, 0, Qt.AlignmentFlag.AlignTop)
+        panel_layout.addLayout(command_row)
+
+        self.log = QPlainTextEdit()
+        self.log.setObjectName("terminalLog")
+        self.log.setReadOnly(True)
+        self.log.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
+        self.log.setMinimumHeight(150)
+        self.log.setMaximumHeight(300)
+        panel_layout.addWidget(self.log)
+        layout.addWidget(self.panel)
+        self.panel.setMaximumHeight(16777215)
+
+        self.update_toggle_text()
+
+    def toggle_expanded(self):
+        self.set_expanded(not self.expanded)
+
+    def set_expanded(self, expanded):
+        if self.expanded == bool(expanded):
+            return
+        self.expanded = bool(expanded)
+        self.animate_panel_visibility(self.expanded)
+        self.update_toggle_text()
+
+    def animate_panel_visibility(self, expanded):
+        if self.panel_animation is not None:
+            self.panel_animation.stop()
+
+        if expanded:
+            self.panel.show()
+            self.panel.setMaximumHeight(0)
+            start_height = 0
+            end_height = max(1, self.panel.sizeHint().height())
+        else:
+            start_height = max(1, self.panel.height())
+            end_height = 0
+
+        self.panel_animation = QPropertyAnimation(self.panel, b"maximumHeight", self)
+        self.panel_animation.setDuration(220)
+        self.panel_animation.setEasingCurve(QEasingCurve.Type.InOutCubic)
+        self.panel_animation.setStartValue(start_height)
+        self.panel_animation.setEndValue(end_height)
+        self.panel_animation.finished.connect(
+            lambda expanded=expanded: self.finish_panel_animation(expanded)
+        )
+        self.panel_animation.start()
+
+    def finish_panel_animation(self, expanded):
+        if expanded:
+            self.panel.setMaximumHeight(16777215)
+        else:
+            self.panel.hide()
+            self.panel.setMaximumHeight(16777215)
+
+    def update_toggle_text(self):
+        command = " ".join(self.command.split())
+        if len(command) > 110:
+            command = command[:107] + "..."
+        self.toggle_button.setText(f"{self.run_label} {command}")
+        self.arrow_button.set_rotation(90 if self.expanded else 0)
+
+    def copy_command(self):
+        QGuiApplication.clipboard().setText(self.command)
+        show_widget_toast(self, "Command copied")
+
+    def append_log(self, text):
+        cursor = self.log.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        cursor.insertText(text)
+        self.log.setTextCursor(cursor)
+        self.log.ensureCursorVisible()
+
+    def finish(self, status):
+        self.run_label = "Ran"
+        self.status_label.setText(status)
+        if not self.log.toPlainText().strip():
+            self.append_log("(no output)\n")
+        self.update_toggle_text()
+        self.set_expanded(False)
+
 class AssistantCodeHighlighter(QSyntaxHighlighter):
     def __init__(self, document, language=""):
         super().__init__(document)
@@ -972,6 +1155,9 @@ class MessageCard(QFrame):
         self.loading_step = 0
         self.attachments = attachments or []
         self.body_layout = None
+        self.terminal_blocks_widget = None
+        self.terminal_blocks_layout = None
+        self.current_terminal_block = None
 
         self.setObjectName("messageCard")
         self.setProperty("user", role == "user")
@@ -1031,6 +1217,13 @@ class MessageCard(QFrame):
             self.thinking_body.setMaximumHeight(16777215)
             self.thinking_body.hide()
             outer_layout.addWidget(self.thinking_body)
+
+            self.terminal_blocks_widget = QWidget()
+            self.terminal_blocks_layout = QVBoxLayout(self.terminal_blocks_widget)
+            self.terminal_blocks_layout.setContentsMargins(0, 0, 0, 0)
+            self.terminal_blocks_layout.setSpacing(10)
+            self.terminal_blocks_widget.hide()
+            outer_layout.addWidget(self.terminal_blocks_widget)
 
             self.loading_timer = QTimer(self)
             self.loading_timer.setInterval(320)
@@ -1175,19 +1368,26 @@ class MessageCard(QFrame):
         self.update_text(self.raw_text + token)
 
     def start_terminal_command(self, command, shell_name):
-        if self.role != "assistant":
+        if self.role != "assistant" or self.terminal_blocks_layout is None:
             return
-        self.append_text(f"\n\n```terminal\n$ {command}\n")
+        self.terminal_blocks_widget.show()
+        block = TerminalCommandBlock(command, shell_name)
+        self.terminal_blocks_layout.addWidget(block)
+        self.current_terminal_block = block
 
     def append_terminal_log(self, text):
         if self.role != "assistant":
             return
-        self.append_text(text)
+        if self.current_terminal_block is None:
+            self.start_terminal_command("command", "Bash")
+        if self.current_terminal_block is not None:
+            self.current_terminal_block.append_log(text)
 
     def finish_terminal_command(self, status):
-        if self.role != "assistant":
+        if self.role != "assistant" or self.current_terminal_block is None:
             return
-        self.append_text(f"\n[{status}]\n```\n")
+        self.current_terminal_block.finish(status)
+        self.current_terminal_block = None
 
     def append_thinking(self, token, visible):
         if self.role != "assistant":
