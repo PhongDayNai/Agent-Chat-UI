@@ -1,5 +1,16 @@
 """Qt stylesheets for agent-chat-ui."""
 
+from pathlib import Path
+
+
+ASSET_ROOT = Path(__file__).resolve().parent.parent / "assets"
+CHEVRON_DOWN_ICON = ASSET_ROOT / "ic_chevron_down.svg"
+CHEVRON_RIGHT_ICON = ASSET_ROOT / "ic_chevron_right.svg"
+CHECK_ICON = ASSET_ROOT / "ic_menu_check.svg"
+ARROW_DOWN_ICON = ASSET_ROOT / "ic_arrow_down.svg"
+ARROW_DOWN_FULL_ACCESS_ICON = ASSET_ROOT / "ic_arrow_down_full_access.svg"
+
+
 APP_STYLE = """
 QMainWindow {
     background: #0f1011;
@@ -321,7 +332,7 @@ QPushButton#terminalPermissionButton {
     border: 1px solid transparent;
     border-radius: 14px;
     color: #f2f3f5;
-    padding: 5px 9px;
+    padding: 5px 30px 5px 9px;
     font-size: 10pt;
     font-weight: 400;
 }
@@ -336,6 +347,100 @@ QPushButton#terminalPermissionButton:disabled {
     color: #5f6368;
     background: transparent;
     border-color: transparent;
+}
+QPushButton#terminalPermissionButton::menu-indicator {
+    image: url("__ARROW_DOWN_ICON__");
+    subcontrol-origin: padding;
+    subcontrol-position: center right;
+    right: 9px;
+    width: 12px;
+    height: 12px;
+}
+QPushButton#terminalPermissionButton[fullAccess="true"]::menu-indicator {
+    image: url("__ARROW_DOWN_FULL_ACCESS_ICON__");
+}
+QPushButton#terminalPermissionButton::menu-indicator:disabled {
+    image: none;
+}
+QMenu#terminalPermissionMenu {
+    min-width: 196px;
+    padding: 7px;
+}
+QPushButton#terminalPermissionMenuItem {
+    min-width: 172px;
+    background: transparent;
+    border: none;
+    border-radius: 8px;
+    color: #f2f3f5;
+    padding: 8px 16px 8px 10px;
+    text-align: left;
+    font-size: 10pt;
+    font-weight: 500;
+}
+QPushButton#terminalPermissionMenuItem:hover,
+QPushButton#terminalPermissionMenuItem[selected="true"] {
+    background: #23272b;
+    color: #ffffff;
+}
+QPushButton#terminalPermissionMenuItem[fullAccess="true"] {
+    color: #d5c537;
+}
+QPushButton#terminalPermissionMenuItem[fullAccess="true"]:hover,
+QPushButton#terminalPermissionMenuItem[fullAccess="true"][selected="true"] {
+    background: #29291c;
+    color: #d5c537;
+}
+QPushButton#modelSelectorButton,
+QPushButton#terminalPermissionSideButton {
+    background: #151719;
+    border: 1px solid #2a2d30;
+    border-radius: 14px;
+    color: #e8eaed;
+    padding: 8px 38px 8px 12px;
+    font-size: 11pt;
+    text-align: left;
+}
+QPushButton#modelSelectorButton:hover,
+QPushButton#terminalPermissionSideButton:hover {
+    background: #151719;
+    border-color: #3a3f44;
+}
+QPushButton#modelSelectorButton:pressed,
+QPushButton#terminalPermissionSideButton:pressed {
+    background: #151719;
+    border-color: #f2f3f5;
+}
+QPushButton#modelSelectorButton:disabled,
+QPushButton#terminalPermissionSideButton:disabled {
+    background: #141618;
+    color: #5f6368;
+    border-color: #24272a;
+}
+QPushButton#modelSelectorButton::menu-indicator,
+QPushButton#terminalPermissionSideButton::menu-indicator {
+    image: url("__CHEVRON_DOWN_ICON__");
+    subcontrol-origin: padding;
+    subcontrol-position: center right;
+    right: 13px;
+    width: 12px;
+    height: 12px;
+}
+QPushButton#modelSelectorButton::menu-indicator:disabled,
+QPushButton#terminalPermissionSideButton::menu-indicator:disabled {
+    image: none;
+}
+QPushButton#terminalPermissionSideButton::menu-indicator {
+    image: url("__ARROW_DOWN_ICON__");
+}
+QPushButton#terminalPermissionSideButton[fullAccess="true"] {
+    color: #d5c537;
+}
+QPushButton#terminalPermissionSideButton[fullAccess="true"]::menu-indicator {
+    image: url("__ARROW_DOWN_FULL_ACCESS_ICON__");
+}
+QMenu#modelMenu,
+QMenu#terminalPermissionMenu {
+    min-width: 196px;
 }
 QFrame#terminalApprovalBanner {
     background: #181a1c;
@@ -546,30 +651,46 @@ QToolTip {
     padding: 8px 10px;
     font-size: 10pt;
 }
-QMenu#historyMenu {
+QMenu {
     background: #151719;
-    border: 1px solid #2a2d30;
-    border-radius: 10px;
+    border: 1px solid #2f3338;
+    border-radius: 12px;
     padding: 6px;
 }
-QMenu#historyMenu::item {
+QMenu::item {
     background: transparent;
     color: #d8dadd;
-    padding: 7px 28px 7px 10px;
-    border-radius: 7px;
+    padding: 8px 30px 8px 12px;
+    border-radius: 8px;
 }
-QMenu#historyMenu::item:selected {
-    background: #202326;
+QMenu::item:selected {
+    background: #23272b;
     color: #ffffff;
 }
-QMenu#historyMenu::item:disabled {
-    background: #090b0d;
-    color: #f4f5f6;
+QMenu::item:pressed {
+    background: #2b3035;
 }
-QMenu#historyMenu::separator {
+QMenu::item:disabled {
+    background: transparent;
+    color: #747a80;
+}
+QMenu::separator {
     height: 1px;
     background: #2a2d30;
-    margin: 6px 4px;
+    margin: 7px 4px;
+}
+QMenu::indicator {
+    width: 16px;
+    height: 16px;
+    padding-left: 4px;
+}
+QMenu::indicator:checked {
+    image: url("__CHECK_ICON__");
+}
+QMenu::right-arrow {
+    image: url("__CHEVRON_RIGHT_ICON__");
+    width: 12px;
+    height: 12px;
 }
 QPlainTextEdit#composerInput {
     background: transparent;
@@ -599,18 +720,80 @@ QDoubleSpinBox:focus,
 QSpinBox:focus {
     border-color: #f2f3f5;
 }
+QComboBox {
+    min-height: 20px;
+    padding: 8px 38px 8px 12px;
+}
+QComboBox:hover {
+    background: #181b1e;
+    border-color: #3a3f44;
+}
+QComboBox:on {
+    background: #1b1f22;
+    border-color: #f2f3f5;
+    border-bottom-left-radius: 10px;
+    border-bottom-right-radius: 10px;
+}
+QComboBox:disabled {
+    background: #141618;
+    color: #5f6368;
+    border-color: #24272a;
+}
 QComboBox::drop-down {
     border: none;
-    width: 28px;
+    subcontrol-origin: padding;
+    subcontrol-position: top right;
+    width: 32px;
+    border-top-right-radius: 14px;
+    border-bottom-right-radius: 14px;
+    background: transparent;
+}
+QComboBox::drop-down:hover {
+    background: #202326;
+}
+QComboBox::down-arrow {
+    image: url("__CHEVRON_DOWN_ICON__");
+    width: 12px;
+    height: 12px;
+}
+QComboBox::down-arrow:disabled {
+    image: none;
 }
 QComboBox[historyAvailable="false"]::drop-down {
     width: 0px;
 }
+QComboBox[historyAvailable="false"] {
+    padding-right: 12px;
+}
+QComboBox[historyAvailable="false"]::down-arrow {
+    image: none;
+}
+QComboBox QLineEdit {
+    background: transparent;
+    border: none;
+    color: #e8eaed;
+    padding: 0;
+    selection-background-color: #3a3f44;
+}
 QComboBox QAbstractItemView {
     background: #151719;
-    border: 1px solid #2a2d30;
-    selection-background-color: #2a2d30;
+    border: 1px solid #2f3338;
+    border-radius: 12px;
+    padding: 6px;
+    color: #d8dadd;
+    selection-background-color: #23272b;
+    selection-color: #ffffff;
     outline: none;
+}
+QComboBox QAbstractItemView::item {
+    min-height: 28px;
+    padding: 7px 10px;
+    border-radius: 8px;
+}
+QComboBox QAbstractItemView::item:hover,
+QComboBox QAbstractItemView::item:selected {
+    background: #23272b;
+    color: #ffffff;
 }
 QPlainTextEdit {
     padding: 12px 14px;
@@ -622,7 +805,13 @@ QTextBrowser {
     color: #e8eaed;
     font-size: 11pt;
 }
-"""
+""".replace("__CHEVRON_DOWN_ICON__", CHEVRON_DOWN_ICON.as_posix()).replace(
+    "__CHEVRON_RIGHT_ICON__",
+    CHEVRON_RIGHT_ICON.as_posix(),
+).replace("__CHECK_ICON__", CHECK_ICON.as_posix()).replace(
+    "__ARROW_DOWN_FULL_ACCESS_ICON__",
+    ARROW_DOWN_FULL_ACCESS_ICON.as_posix(),
+).replace("__ARROW_DOWN_ICON__", ARROW_DOWN_ICON.as_posix())
 
 MARKDOWN_STYLESHEET = """
 body {

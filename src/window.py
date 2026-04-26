@@ -8,8 +8,8 @@ from io import BytesIO
 from pathlib import Path
 
 import requests
-from PyQt6.QtCore import QByteArray, QBuffer, QEasingCurve, QEvent, QIODevice, QPoint, QPropertyAnimation, QTimer, QUrl, Qt
-from PyQt6.QtGui import QColor, QDesktopServices, QGuiApplication, QIcon, QImage, QPainter, QPixmap
+from PyQt6.QtCore import QByteArray, QBuffer, QEasingCurve, QEvent, QIODevice, QPoint, QPropertyAnimation, QRectF, QSize, QTimer, QUrl, Qt
+from PyQt6.QtGui import QDesktopServices, QGuiApplication, QIcon, QImage, QPainter, QPixmap
 from PyQt6.QtSvg import QSvgRenderer
 from PyQt6.QtWidgets import (
     QApplication,
@@ -31,6 +31,7 @@ from PyQt6.QtWidgets import (
     QSpinBox,
     QVBoxLayout,
     QWidget,
+    QWidgetAction,
 )
 
 try:
@@ -80,6 +81,7 @@ TERMINAL_PERMISSION_COLORS = {
     TERMINAL_PERMISSION_DEFAULT: "#f2f3f5",
     TERMINAL_PERMISSION_FULL_ACCESS: "#d5c537",
 }
+SIDEBAR_DROPDOWN_TEXT_INSET = "  "
 
 class AgentChatWindow(QMainWindow):
     def __init__(self):
@@ -141,11 +143,12 @@ class AgentChatWindow(QMainWindow):
         self.pending_terminal_permission = None
         self.assistant_reply_focus_active = False
         self.assistant_reply_focus_card = None
+        self.selected_model_name = ""
         self.advanced_expanded = False
         self.sidebar_pinned = self.pin_panel
         self.sidebar_open = False
         self.sidebar_collapsed_width = 68
-        self.sidebar_scrollbar_allowance = 24
+        self.sidebar_scrollbar_allowance = 60
         self.sidebar_expanded_max_width = 380
         self.default_window_width = 1180
         self.default_window_height = 820
@@ -355,7 +358,7 @@ class AgentChatWindow(QMainWindow):
     def terminal_permission_color(self, permission):
         return TERMINAL_PERMISSION_COLORS.get(permission, TERMINAL_PERMISSION_COLORS[TERMINAL_PERMISSION_DEFAULT])
 
-    def tinted_svg_icon(self, icon_path, color, size=18):
+    def tinted_svg_icon(self, icon_path, color, size=18, render_rect=None):
         try:
             content = Path(icon_path).read_text(encoding="utf-8")
         except OSError:
@@ -372,7 +375,10 @@ class AgentChatWindow(QMainWindow):
         painter = QPainter(pixmap)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         renderer = QSvgRenderer(QByteArray(svg.encode("utf-8")))
-        renderer.render(painter)
+        if render_rect is None:
+            renderer.render(painter)
+        else:
+            renderer.render(painter, render_rect)
         painter.end()
         return QIcon(pixmap)
 
@@ -380,6 +386,14 @@ class AgentChatWindow(QMainWindow):
         return self.tinted_svg_icon(
             self.terminal_permission_icon_path(permission),
             self.terminal_permission_color(permission),
+        )
+
+    def terminal_permission_side_icon(self, permission):
+        return self.tinted_svg_icon(
+            self.terminal_permission_icon_path(permission),
+            self.terminal_permission_color(permission),
+            size=24,
+            render_rect=QRectF(5, 2, 18, 18),
         )
 
     def add_history_value(self, values, value):
@@ -560,7 +574,7 @@ class AgentChatWindow(QMainWindow):
         self.sidebar_content.setObjectName("sidebarScrollBody")
         self.sidebar_content.setMinimumWidth(0)
         content_layout = QVBoxLayout(self.sidebar_content)
-        content_layout.setContentsMargins(0, 0, 10, 0)
+        content_layout.setContentsMargins(0, 0, 28, 0)
         content_layout.setSpacing(16)
 
         title = QLabel("Agent Chat")
@@ -581,9 +595,12 @@ class AgentChatWindow(QMainWindow):
         self.status_detail.setWordWrap(True)
         content_layout.addWidget(self.status_detail)
 
-        self.model_selector = QComboBox()
-        self.model_selector.setEditable(False)
-        self.model_selector.currentTextChanged.connect(self.update_send_availability)
+        self.model_selector = QPushButton("Select model")
+        self.model_selector.setObjectName("modelSelectorButton")
+        self.model_menu = QMenu(self)
+        self.model_menu.setObjectName("modelMenu")
+        self.model_menu.aboutToShow.connect(self.refresh_model_menu)
+        self.model_selector.setMenu(self.model_menu)
         content_layout.addWidget(self.model_selector)
 
         buttons_row = QHBoxLayout()
@@ -798,22 +815,14 @@ class AgentChatWindow(QMainWindow):
         terminal_row.addStretch()
         terminal_section_layout.addLayout(terminal_row)
 
-        self.agent_terminal_permission_combo = QComboBox()
-        self.agent_terminal_permission_combo.addItem(
-            self.terminal_permission_icon(TERMINAL_PERMISSION_DEFAULT),
-            "Default permissions",
-            TERMINAL_PERMISSION_DEFAULT,
-        )
-        self.agent_terminal_permission_combo.addItem(
-            self.terminal_permission_icon(TERMINAL_PERMISSION_FULL_ACCESS),
-            "Full access",
-            TERMINAL_PERMISSION_FULL_ACCESS,
-        )
-        self.agent_terminal_permission_combo.setCurrentIndex(
-            1 if self.agent_terminal_permission == TERMINAL_PERMISSION_FULL_ACCESS else 0
-        )
-        self.agent_terminal_permission_combo.currentIndexChanged.connect(self.on_agent_terminal_permission_changed)
-        terminal_section_layout.addWidget(self.agent_terminal_permission_combo)
+        self.side_terminal_permission_button = QPushButton("")
+        self.side_terminal_permission_button.setObjectName("terminalPermissionSideButton")
+        self.side_terminal_permission_button.setIconSize(QSize(24, 24))
+        self.side_terminal_permission_menu = QMenu(self)
+        self.side_terminal_permission_menu.setObjectName("terminalPermissionMenu")
+        self.side_terminal_permission_menu.aboutToShow.connect(self.refresh_side_terminal_permission_menu)
+        self.side_terminal_permission_button.setMenu(self.side_terminal_permission_menu)
+        terminal_section_layout.addWidget(self.side_terminal_permission_button)
 
         self.default_permissions_detail = QLabel("")
         self.default_permissions_detail.setObjectName("subtleLabel")
@@ -1018,7 +1027,10 @@ class AgentChatWindow(QMainWindow):
 
         self.terminal_permission_button = QPushButton("")
         self.terminal_permission_button.setObjectName("terminalPermissionButton")
-        self.terminal_permission_button.clicked.connect(self.show_terminal_permission_menu)
+        self.terminal_permission_menu = QMenu(self)
+        self.terminal_permission_menu.setObjectName("terminalPermissionMenu")
+        self.terminal_permission_menu.aboutToShow.connect(self.refresh_terminal_permission_menu)
+        self.terminal_permission_button.setMenu(self.terminal_permission_menu)
         footer_row.addWidget(self.terminal_permission_button)
 
         self.composer_hint = QLabel("Shift+Enter for newline")
@@ -1117,11 +1129,6 @@ class AgentChatWindow(QMainWindow):
             else "Terminal agent disabled."
         )
 
-    def on_agent_terminal_permission_changed(self, _index):
-        if not hasattr(self, "agent_terminal_permission_combo"):
-            return
-        self.set_agent_terminal_permission(self.agent_terminal_permission_combo.currentData())
-
     def set_agent_terminal_permission(self, value):
         value = self.normalize_agent_terminal_permission(value)
         if self.agent_terminal_permission == value:
@@ -1138,26 +1145,68 @@ class AgentChatWindow(QMainWindow):
         return "Default permissions"
 
     def show_terminal_permission_menu(self):
-        menu = QMenu(self)
-        default_action = menu.addAction("Default permissions")
-        default_action.setIcon(self.terminal_permission_icon(TERMINAL_PERMISSION_DEFAULT))
-        default_action.setCheckable(True)
-        default_action.setChecked(self.agent_terminal_permission == TERMINAL_PERMISSION_DEFAULT)
-        default_action.triggered.connect(lambda: self.set_agent_terminal_permission(TERMINAL_PERMISSION_DEFAULT))
+        if not hasattr(self, "terminal_permission_menu"):
+            return
+        self.refresh_terminal_permission_menu()
+        self.terminal_permission_menu.exec(
+            self.terminal_permission_button.mapToGlobal(self.terminal_permission_button.rect().bottomLeft())
+        )
 
-        full_action = menu.addAction("Full access")
-        full_action.setIcon(self.terminal_permission_icon(TERMINAL_PERMISSION_FULL_ACCESS))
-        full_action.setCheckable(True)
-        full_action.setChecked(self.agent_terminal_permission == TERMINAL_PERMISSION_FULL_ACCESS)
-        full_action.triggered.connect(lambda: self.set_agent_terminal_permission(TERMINAL_PERMISSION_FULL_ACCESS))
+    def refresh_terminal_permission_menu(self):
+        if not hasattr(self, "terminal_permission_menu"):
+            return
+        self.terminal_permission_menu.clear()
+        self.add_terminal_permission_menu_item(
+            self.terminal_permission_menu,
+            "Default permissions",
+            TERMINAL_PERMISSION_DEFAULT,
+        )
+        self.add_terminal_permission_menu_item(
+            self.terminal_permission_menu,
+            "Full access",
+            TERMINAL_PERMISSION_FULL_ACCESS,
+        )
 
-        menu.exec(self.terminal_permission_button.mapToGlobal(self.terminal_permission_button.rect().bottomLeft()))
+    def refresh_side_terminal_permission_menu(self):
+        if not hasattr(self, "side_terminal_permission_menu"):
+            return
+        self.side_terminal_permission_menu.clear()
+        self.add_terminal_permission_menu_item(
+            self.side_terminal_permission_menu,
+            "Default permissions",
+            TERMINAL_PERMISSION_DEFAULT,
+        )
+        self.add_terminal_permission_menu_item(
+            self.side_terminal_permission_menu,
+            "Full access",
+            TERMINAL_PERMISSION_FULL_ACCESS,
+        )
+
+    def add_terminal_permission_menu_item(self, menu, label, permission):
+        action = QWidgetAction(menu)
+        button = QPushButton(label)
+        button.setObjectName("terminalPermissionMenuItem")
+        button.setIcon(self.terminal_permission_icon(permission))
+        button.setProperty("fullAccess", permission == TERMINAL_PERMISSION_FULL_ACCESS)
+        button.setProperty("selected", self.agent_terminal_permission == permission)
+        button.clicked.connect(
+            lambda _checked=False, value=permission: self.select_terminal_permission_from_menu(value)
+        )
+        action.setDefaultWidget(button)
+        menu.addAction(action)
+
+    def select_terminal_permission_from_menu(self, permission):
+        self.set_agent_terminal_permission(permission)
+        if hasattr(self, "terminal_permission_menu"):
+            self.terminal_permission_menu.close()
+        if hasattr(self, "side_terminal_permission_menu"):
+            self.side_terminal_permission_menu.close()
 
     def refresh_terminal_permission_ui(self):
         label = self.agent_terminal_permission_label()
         if hasattr(self, "terminal_permission_button"):
             suffix = " enabled" if self.agent_terminal_enabled else " disabled"
-            self.terminal_permission_button.setText(f"{label} ▾")
+            self.terminal_permission_button.setText(label)
             self.terminal_permission_button.setIcon(self.terminal_permission_icon(self.agent_terminal_permission))
             self.terminal_permission_button.setToolTip(f"Terminal access is{suffix}.")
             self.terminal_permission_button.setProperty(
@@ -1171,13 +1220,16 @@ class AgentChatWindow(QMainWindow):
             self.agent_terminal_checkbox.blockSignals(True)
             self.agent_terminal_checkbox.setChecked(self.agent_terminal_enabled)
             self.agent_terminal_checkbox.blockSignals(False)
-        if hasattr(self, "agent_terminal_permission_combo"):
-            self.agent_terminal_permission_combo.blockSignals(True)
-            self.agent_terminal_permission_combo.setCurrentIndex(
-                1 if self.agent_terminal_permission == TERMINAL_PERMISSION_FULL_ACCESS else 0
+        if hasattr(self, "side_terminal_permission_button"):
+            self.side_terminal_permission_button.setText(label)
+            self.side_terminal_permission_button.setIcon(self.terminal_permission_side_icon(self.agent_terminal_permission))
+            self.side_terminal_permission_button.setProperty(
+                "fullAccess",
+                self.agent_terminal_permission == TERMINAL_PERMISSION_FULL_ACCESS,
             )
-            self.agent_terminal_permission_combo.setEnabled(self.agent_terminal_enabled)
-            self.agent_terminal_permission_combo.blockSignals(False)
+            self.side_terminal_permission_button.style().unpolish(self.side_terminal_permission_button)
+            self.side_terminal_permission_button.style().polish(self.side_terminal_permission_button)
+            self.side_terminal_permission_button.setEnabled(self.agent_terminal_enabled)
         if hasattr(self, "default_permissions_detail"):
             allowed = ", ".join(self.default_permissions)
             self.default_permissions_detail.setText(f"Default commands: {allowed}")
@@ -1621,24 +1673,51 @@ class AgentChatWindow(QMainWindow):
             self.update_send_availability()
 
     def populate_models(self, models):
-        current_text = self.model_selector.currentText().strip()
-        self.model_selector.blockSignals(True)
-        self.model_selector.clear()
+        current_text = self.current_model_name()
         if models:
-            self.model_selector.addItems(models)
             if current_text and current_text in models:
-                self.model_selector.setCurrentText(current_text)
-        self.model_selector.blockSignals(False)
+                self.set_selected_model_name(current_text)
+            else:
+                self.set_selected_model_name(models[0])
+        else:
+            self.set_selected_model_name("")
         self.model_selector.setEnabled(bool(models))
 
     def set_disconnected_state(self, detail):
         self.available_models = []
-        self.model_selector.blockSignals(True)
-        self.model_selector.clear()
-        self.model_selector.blockSignals(False)
+        self.set_selected_model_name("")
         self.model_selector.setEnabled(False)
         self.status_badge.setText("Disconnected")
         self.status_detail.setText(detail)
+
+    def current_model_name(self):
+        return self.selected_model_name.strip()
+
+    def set_selected_model_name(self, model_name):
+        self.selected_model_name = model_name.strip()
+        if self.selected_model_name:
+            self.model_selector.setText(f"{SIDEBAR_DROPDOWN_TEXT_INSET}{self.selected_model_name}")
+            self.model_selector.setToolTip(self.selected_model_name)
+        else:
+            self.model_selector.setText(f"{SIDEBAR_DROPDOWN_TEXT_INSET}Select model")
+            self.model_selector.setToolTip("Select model")
+        self.update_send_availability()
+
+    def refresh_model_menu(self):
+        if not hasattr(self, "model_menu"):
+            return
+        self.model_menu.clear()
+        current = self.current_model_name()
+        for model in self.available_models:
+            action = self.model_menu.addAction(model)
+            action.setCheckable(True)
+            action.setChecked(model == current)
+            action.triggered.connect(lambda _checked=False, value=model: self.select_model(value))
+
+    def select_model(self, model_name):
+        self.set_selected_model_name(model_name)
+        if hasattr(self, "model_menu"):
+            self.model_menu.close()
 
     def normalize_base_url(self, raw_value):
         value = raw_value.strip()
@@ -1778,7 +1857,7 @@ class AgentChatWindow(QMainWindow):
 
     def update_send_availability(self):
         has_text = bool(self.composer.toPlainText().strip()) or bool(self.pending_attachments)
-        has_model = bool(self.available_models) and bool(self.model_selector.currentText().strip())
+        has_model = bool(self.available_models) and bool(self.current_model_name())
         busy = self.worker is not None and self.worker.isRunning()
         if has_text:
             self.configure_send_action_button("send", enabled=has_model)
@@ -1850,7 +1929,7 @@ class AgentChatWindow(QMainWindow):
             "url_inputs": url_inputs,
             "user_message": user_message,
             "user_display": user_display,
-            "model_name": self.model_selector.currentText().strip(),
+            "model_name": self.current_model_name(),
         }
 
     def try_make_submission(self, user_text, attachments):
@@ -1866,7 +1945,7 @@ class AgentChatWindow(QMainWindow):
         if not user_text and not attachments:
             return False
 
-        model_name = self.model_selector.currentText().strip()
+        model_name = self.current_model_name()
         if not model_name:
             self.set_status_message("Select a model before sending.")
             return False
@@ -2108,7 +2187,7 @@ class AgentChatWindow(QMainWindow):
         if not user_text and not attachments:
             return
 
-        model_name = self.model_selector.currentText().strip()
+        model_name = self.current_model_name()
         if not model_name:
             self.set_status_message("Select a model before sending.")
             return
