@@ -443,6 +443,14 @@ QLabel#toastLabel {
     font-weight: 600;
     padding: 9px 14px;
 }
+QToolTip {
+    background: #202326;
+    border: 1px solid #3a3f44;
+    border-radius: 10px;
+    color: #f4f5f6;
+    padding: 8px 10px;
+    font-size: 10pt;
+}
 QPlainTextEdit#composerInput {
     background: transparent;
     border: none;
@@ -538,5 +546,9 @@ code {
 a {
     color: #f2f3f5;
     text-decoration: none;
+}
+a:hover {
+    color: #2f7ed8;
+    text-decoration: underline;
 }
 """

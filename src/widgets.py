@@ -2,8 +2,10 @@
 
 import re
 from datetime import datetime
+from html import escape
 from math import ceil
 from pathlib import Path
+from urllib.parse import unquote
 
 from PyQt6.QtCore import QByteArray, QEvent, QRectF, QTimer, QUrl, Qt, pyqtSignal
 from PyQt6.QtGui import (
@@ -337,9 +339,37 @@ class AutoHeightTextBrowser(QTextBrowser):
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setFrameStyle(QFrame.Shape.NoFrame)
-        self.setOpenExternalLinks(True)
+        self.setOpenExternalLinks(False)
+        self.setOpenLinks(False)
+        self.setMouseTracking(True)
         self.setMaximumHeight(16777215)
+        self.anchorClicked.connect(self.handle_anchor_clicked)
         self.update_height()
+
+    def handle_anchor_clicked(self, url):
+        url_text = url.toString()
+        if url_text.startswith("copy-code:"):
+            QGuiApplication.clipboard().setText(unquote(url_text[len("copy-code:"):]))
+            show_widget_toast(self, "Code copied")
+            return
+        if QApplication.keyboardModifiers() & Qt.KeyboardModifier.ControlModifier:
+            QDesktopServices.openUrl(url)
+            return
+        QGuiApplication.clipboard().setText(url.toString())
+        show_widget_toast(self, "Link copied")
+
+    def mouseMoveEvent(self, event):
+        anchor = self.anchorAt(event.position().toPoint())
+        self.viewport().setCursor(
+            Qt.CursorShape.PointingHandCursor if anchor else Qt.CursorShape.IBeamCursor
+        )
+        self.setToolTip(link_hover_tooltip(anchor) if anchor else "")
+        super().mouseMoveEvent(event)
+
+    def leaveEvent(self, event):
+        self.viewport().unsetCursor()
+        self.setToolTip("")
+        super().leaveEvent(event)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -1195,3 +1225,20 @@ def show_widget_toast(widget, text):
     window = widget.window() if widget is not None else None
     if window is not None and hasattr(window, "show_toast"):
         window.show_toast(text)
+
+
+def link_hover_tooltip(anchor):
+    if anchor.startswith("copy-code:"):
+        title = "Copy code"
+        lines = ("Click to copy this code snippet.",)
+    else:
+        title = "Link"
+        lines = ("Click to copy.", "Ctrl+click to open in browser.")
+    body = "<br>".join(escape(line, quote=False) for line in lines)
+    return (
+        '<html><body style="margin:0;">'
+        '<div style="width:210px; white-space:normal;">'
+        f'<div style="font-weight:600; color:#f4f5f6; margin-bottom:4px;">{title}</div>'
+        f'<div style="color:#c7cacf; line-height:1.35;">{body}</div>'
+        "</div></body></html>"
+    )
