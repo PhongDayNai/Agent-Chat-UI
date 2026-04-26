@@ -25,3 +25,12 @@ pip install -r requirements.txt
 ```bash
 python agent_chat_ui.py
 ```
+
+## Structure
+
+```text
+agent_chat_ui.py      # thin launcher
+src/    # application package
+assets/               # SVG icons
+config.json           # local default config
+```
