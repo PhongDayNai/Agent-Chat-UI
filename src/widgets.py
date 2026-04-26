@@ -1,11 +1,24 @@
 """Reusable Qt widgets used by the chat window."""
 
+import re
 from datetime import datetime
 from math import ceil
 from pathlib import Path
 
 from PyQt6.QtCore import QByteArray, QEvent, QRectF, QTimer, QUrl, Qt, pyqtSignal
-from PyQt6.QtGui import QDesktopServices, QFont, QGuiApplication, QIcon, QImage, QPainter, QPixmap, QTextOption
+from PyQt6.QtGui import (
+    QColor,
+    QDesktopServices,
+    QFont,
+    QGuiApplication,
+    QIcon,
+    QImage,
+    QPainter,
+    QPixmap,
+    QSyntaxHighlighter,
+    QTextCharFormat,
+    QTextOption,
+)
 from PyQt6.QtSvg import QSvgRenderer
 from PyQt6.QtWidgets import (
     QApplication,
@@ -26,8 +39,10 @@ from PyQt6.QtWidgets import (
 )
 
 from constants import COPY_ICON_PATH, PIN_ICON_PATH, RETRY_ICON_PATH
-from markdown_utils import prepare_assistant_html
+from markdown_utils import prepare_assistant_html, render_latexish_text, split_markdown_code_segments
 from styles import MARKDOWN_STYLESHEET
+
+ASSISTANT_CODE_CONTENT_PADDING = 12
 
 class DeletableHistoryDelegate(QStyledItemDelegate):
     def __init__(self, parent=None):
@@ -655,6 +670,226 @@ class FilePreviewDialog(QDialog):
     def open_externally(self):
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(self.path)))
 
+class AssistantCodeHighlighter(QSyntaxHighlighter):
+    def __init__(self, document, language=""):
+        super().__init__(document)
+        self.language = (language or "").lower()
+        self.command_format = QTextCharFormat()
+        self.command_format.setForeground(QColor("#ff9f43"))
+        self.keyword_format = QTextCharFormat()
+        self.keyword_format.setForeground(QColor("#ffcf70"))
+        self.string_format = QTextCharFormat()
+        self.string_format.setForeground(QColor("#9ad67d"))
+        self.number_format = QTextCharFormat()
+        self.number_format.setForeground(QColor("#c792ea"))
+        self.function_format = QTextCharFormat()
+        self.function_format.setForeground(QColor("#82aaff"))
+        self.type_format = QTextCharFormat()
+        self.type_format.setForeground(QColor("#7fdbca"))
+        self.property_format = QTextCharFormat()
+        self.property_format.setForeground(QColor("#f7b267"))
+        self.comment_format = QTextCharFormat()
+        self.comment_format.setForeground(QColor("#8c9298"))
+        self.tag_format = QTextCharFormat()
+        self.tag_format.setForeground(QColor("#ff7b72"))
+        self.attr_format = QTextCharFormat()
+        self.attr_format.setForeground(QColor("#d2a8ff"))
+
+    def highlightBlock(self, text):
+        stripped_language = self.language.strip()
+        if stripped_language in {"bash", "sh", "shell"}:
+            self.highlight_strings(text)
+            match = re.match(r"^(\s*)([A-Za-z_][\w-]*)", text)
+            if match:
+                self.setFormat(match.start(2), match.end(2) - match.start(2), self.command_format)
+            for match in re.finditer(r"(?<!\w)(--?[\w-]+)", text):
+                self.setFormat(match.start(1), match.end(1) - match.start(1), self.type_format)
+            for match in re.finditer(r"(\$[\w_]+|\$\{[^}]+\})", text):
+                self.setFormat(match.start(1), match.end(1) - match.start(1), self.property_format)
+            comment_index = text.find("#")
+            if comment_index >= 0:
+                self.setFormat(comment_index, len(text) - comment_index, self.comment_format)
+        elif stripped_language in {"python", "py"}:
+            self.highlight_regex(
+                text,
+                r"\b(def|class|for|while|if|elif|else|return|import|from|in|try|except|with|as|pass|break|continue|and|or|not|True|False|None|lambda|yield)\b",
+                self.keyword_format,
+            )
+            self.highlight_regex(
+                text,
+                r"\b(print|range|len|str|int|float|list|dict|set|tuple|enumerate|zip|open|sum|min|max)\b(?=\s*\()",
+                self.function_format,
+            )
+            self.highlight_regex(text, r"\b\d+(?:\.\d+)?\b", self.number_format)
+            self.highlight_strings(text)
+            comment_index = text.find("#")
+            if comment_index >= 0:
+                self.setFormat(comment_index, len(text) - comment_index, self.comment_format)
+        elif stripped_language in {"javascript", "js", "typescript", "ts", "tsx", "jsx"}:
+            self.highlight_regex(
+                text,
+                r"\b(const|let|var|function|return|if|else|for|while|class|import|from|export|async|await|new|try|catch|finally|throw|true|false|null|undefined)\b",
+                self.keyword_format,
+            )
+            self.highlight_regex(text, r"\b([A-Za-z_$][\w$]*)\b(?=\s*\()", self.function_format)
+            self.highlight_regex(text, r"\b\d+(?:\.\d+)?\b", self.number_format)
+            self.highlight_strings(text)
+            self.highlight_line_comment(text, "//")
+        elif stripped_language == "json":
+            self.highlight_regex(text, r'"([^"\\]|\\.)*"\s*(?=:)', self.property_format)
+            self.highlight_regex(text, r":\s*(\"([^\"\\]|\\.)*\")", self.string_format, group=1)
+            self.highlight_regex(text, r"\b(true|false|null)\b", self.keyword_format)
+            self.highlight_regex(text, r"\b-?\d+(?:\.\d+)?\b", self.number_format)
+        elif stripped_language in {"html", "xml"}:
+            self.highlight_regex(text, r"</?[\w:-]+", self.tag_format)
+            self.highlight_regex(text, r"\b[\w:-]+(?=\=)", self.attr_format)
+            self.highlight_strings(text)
+        elif stripped_language == "css":
+            self.highlight_regex(text, r"[.#]?[-_a-zA-Z][\w-]*(?=\s*\{)", self.tag_format)
+            self.highlight_regex(text, r"[-_a-zA-Z][\w-]*(?=\s*:)", self.property_format)
+            self.highlight_regex(
+                text,
+                r"#[0-9a-fA-F]{3,8}\b|\b\d+(?:\.\d+)?(?:px|rem|em|%|vh|vw)?\b",
+                self.number_format,
+            )
+            self.highlight_strings(text)
+        else:
+            self.highlight_strings(text)
+            self.highlight_regex(text, r"\b\d+(?:\.\d+)?\b", self.number_format)
+
+    def highlight_regex(self, text, pattern, fmt, group=0):
+        for match in re.finditer(pattern, text):
+            start = match.start(group)
+            end = match.end(group)
+            self.setFormat(start, end - start, fmt)
+
+    def highlight_strings(self, text):
+        self.highlight_regex(text, r'"([^"\\]|\\.)*"', self.string_format)
+        self.highlight_regex(text, r"'([^'\\]|\\.)*'", self.string_format)
+
+    def highlight_line_comment(self, text, marker):
+        comment_index = text.find(marker)
+        if comment_index >= 0:
+            self.setFormat(comment_index, len(text) - comment_index, self.comment_format)
+
+
+class AssistantCodeTextEdit(QPlainTextEdit):
+    def wheelEvent(self, event):
+        event.ignore()
+
+
+class AssistantCodeBlock(QFrame):
+    def __init__(self, code, language="", parent=None):
+        super().__init__(parent)
+        self.code = code.rstrip("\n")
+        self.language = self.display_language(language)
+        self.setObjectName("assistantCodeBlock")
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 16, 20, 16)
+        layout.setSpacing(8)
+
+        header = QHBoxLayout()
+        header.setContentsMargins(0, 0, 0, 0)
+        header.setSpacing(8)
+
+        icon = QLabel("</>")
+        icon.setObjectName("assistantCodeIcon")
+        header.addWidget(icon, 0, Qt.AlignmentFlag.AlignVCenter)
+
+        self.language_label = QLabel(self.language)
+        self.language_label.setObjectName("assistantCodeLanguage")
+        header.addWidget(self.language_label, 0, Qt.AlignmentFlag.AlignVCenter)
+        header.addStretch()
+
+        copy_button = SvgActionButton(COPY_ICON_PATH)
+        copy_button.setObjectName("assistantCodeCopyButton")
+        copy_button.setToolTip("Copy code")
+        copy_button.clicked.connect(self.copy_code)
+        header.addWidget(copy_button, 0, Qt.AlignmentFlag.AlignTop)
+        layout.addLayout(header)
+        layout.addSpacing(ASSISTANT_CODE_CONTENT_PADDING)
+
+        self.editor = AssistantCodeTextEdit()
+        self.editor.setObjectName("assistantCodeText")
+        self.editor.setReadOnly(True)
+        self.editor.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.editor.setPlainText(self.code)
+        self.editor.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
+        self.editor.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.editor.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.editor.document().documentLayout().documentSizeChanged.connect(self.update_editor_height)
+        self.highlighter = AssistantCodeHighlighter(self.editor.document(), language)
+        layout.addWidget(self.editor)
+        self.update_editor_height()
+
+    def update_editor_height(self, *_args):
+        self.editor.document().setTextWidth(max(0, self.editor.viewport().width()))
+        doc_layout = self.editor.document().documentLayout()
+        doc_height = 0
+        block = self.editor.document().firstBlock()
+        while block.isValid():
+            rect = doc_layout.blockBoundingRect(block)
+            doc_height += max(self.editor.fontMetrics().lineSpacing(), int(rect.height()))
+            block = block.next()
+        frame = self.editor.frameWidth() * 2
+        target = max(24, doc_height + frame + 12)
+        self.editor.setMinimumHeight(target)
+        self.editor.setMaximumHeight(target)
+        self.editor.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.editor.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.reset_editor_scroll()
+        QTimer.singleShot(0, self.reset_editor_scroll)
+        self.updateGeometry()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.update_editor_height()
+
+    def reset_editor_scroll(self):
+        self.editor.verticalScrollBar().setValue(0)
+        self.editor.horizontalScrollBar().setValue(0)
+
+    def copy_code(self):
+        QGuiApplication.clipboard().setText(self.code)
+        show_widget_toast(self, "Code copied")
+
+    def update_code(self, code, language=""):
+        code = code.rstrip("\n")
+        display_language = self.display_language(language)
+        if self.language != display_language:
+            self.language = display_language
+            self.language_label.setText(self.language)
+            self.highlighter.language = (language or "").lower()
+            self.highlighter.rehighlight()
+        if self.code == code:
+            return
+        self.code = code
+        self.editor.setPlainText(self.code)
+        self.update_editor_height()
+
+    def display_language(self, language):
+        normalized = (language or "").strip()
+        if not normalized:
+            return "Code"
+        aliases = {
+            "bash": "Bash",
+            "sh": "Bash",
+            "shell": "Bash",
+            "python": "Python",
+            "py": "Python",
+            "javascript": "JavaScript",
+            "js": "JavaScript",
+            "typescript": "TypeScript",
+            "ts": "TypeScript",
+            "json": "JSON",
+            "html": "HTML",
+            "css": "CSS",
+            "sql": "SQL",
+        }
+        return aliases.get(normalized.lower(), normalized[:1].upper() + normalized[1:])
+
 class MessageCard(QFrame):
     retry_requested = pyqtSignal(str)
     image_preview_requested = pyqtSignal(list, int)
@@ -668,6 +903,7 @@ class MessageCard(QFrame):
         self.retry_text = retry_text
         self.loading_step = 0
         self.attachments = attachments or []
+        self.body_layout = None
 
         self.setObjectName("messageCard")
         self.setProperty("user", role == "user")
@@ -711,9 +947,11 @@ class MessageCard(QFrame):
         outer_layout.addLayout(header_layout)
 
         if role == "assistant":
-            self.body = AutoHeightTextBrowser()
-            self.body.document().setDefaultStyleSheet(MARKDOWN_STYLESHEET)
-            self.body.setMaximumHeight(16777215)
+            self.body = QWidget()
+            self.body_layout = QVBoxLayout(self.body)
+            self.body_layout.setContentsMargins(0, 0, 0, 0)
+            self.body_layout.setSpacing(10)
+            outer_layout.addWidget(self.body)
 
             self.thinking_label = QLabel("Thinking")
             self.thinking_label.setObjectName("sectionLabel")
@@ -734,8 +972,8 @@ class MessageCard(QFrame):
             self.body.setWordWrap(True)
             self.body.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
             self.body.setStyleSheet("font-size: 11pt; line-height: 1.45; color: #e8eaed;")
+            outer_layout.addWidget(self.body)
 
-        outer_layout.addWidget(self.body)
         self.attachments_widget = None
         self.attachments_layout = None
         if role == "user":
@@ -762,10 +1000,72 @@ class MessageCard(QFrame):
     def update_text(self, text):
         self.raw_text = text
         if self.role == "assistant":
-            self.body.setHtml(prepare_assistant_html(text))
-            self.body.update_height()
+            self.render_assistant_content(text)
         else:
             self.body.setText(text)
+
+    def render_assistant_content(self, text):
+        if self.body_layout is None:
+            return
+        segments = self.assistant_segments(text)
+        for index, segment in enumerate(segments):
+            widget = self.body_layout.itemAt(index).widget() if index < self.body_layout.count() else None
+            if not self.can_reuse_segment_widget(widget, segment):
+                if widget is not None:
+                    item = self.body_layout.takeAt(index)
+                    old_widget = item.widget()
+                    if old_widget is not None:
+                        old_widget.deleteLater()
+                widget = self.create_segment_widget(segment)
+                self.body_layout.insertWidget(index, widget)
+            self.update_segment_widget(widget, segment)
+
+        while self.body_layout.count() > len(segments):
+            item = self.body_layout.takeAt(self.body_layout.count() - 1)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        self.body.updateGeometry()
+
+    def assistant_segments(self, text):
+        segments = []
+        for segment_type, content, language in split_markdown_code_segments(text or "..."):
+            if segment_type == "code":
+                segments.append({"type": "code", "content": content, "language": language})
+            elif content.strip():
+                segments.append({"type": "text", "content": render_latexish_text(content), "language": ""})
+        if not segments:
+            segments.append({"type": "text", "content": "...", "language": ""})
+        return segments
+
+    def can_reuse_segment_widget(self, widget, segment):
+        if segment["type"] == "code":
+            return isinstance(widget, AssistantCodeBlock)
+        return isinstance(widget, AutoHeightTextBrowser)
+
+    def create_segment_widget(self, segment):
+        if segment["type"] == "code":
+            widget = AssistantCodeBlock(segment["content"], segment["language"])
+        else:
+            widget = AutoHeightTextBrowser()
+            widget.document().setDefaultStyleSheet(MARKDOWN_STYLESHEET)
+            widget.setMaximumHeight(16777215)
+        widget.setProperty("segmentContent", None)
+        widget.setProperty("segmentLanguage", None)
+        return widget
+
+    def update_segment_widget(self, widget, segment):
+        previous_content = widget.property("segmentContent")
+        previous_language = widget.property("segmentLanguage")
+        if segment["type"] == "code":
+            if previous_content != segment["content"] or previous_language != segment["language"]:
+                widget.update_code(segment["content"], segment["language"])
+        else:
+            if previous_content != segment["content"]:
+                widget.setHtml(prepare_assistant_html(segment["content"]))
+                widget.update_height()
+        widget.setProperty("segmentContent", segment["content"])
+        widget.setProperty("segmentLanguage", segment["language"])
 
     def refresh_attachments(self):
         if self.role != "user" or self.attachments_layout is None:
@@ -840,8 +1140,7 @@ class MessageCard(QFrame):
 
     def update_loading_text(self):
         dots = "." * (self.loading_step + 1)
-        self.body.setPlainText(dots)
-        self.body.update_height()
+        self.render_assistant_content(dots)
 
     def copy_text(self):
         QGuiApplication.clipboard().setText(self.raw_text)

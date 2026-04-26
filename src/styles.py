@@ -387,6 +387,44 @@ QLabel#attachmentLabel {
     font-size: 9.5pt;
     padding: 4px 0;
 }
+QFrame#assistantCodeBlock {
+    background: #151617;
+    border: 1px solid #2a2d30;
+    border-radius: 18px;
+}
+QLabel#assistantCodeIcon,
+QLabel#assistantCodeLanguage {
+    color: #f2f3f5;
+    font-size: 10pt;
+}
+QLabel#assistantCodeIcon {
+    font-family: "IBM Plex Mono", "Consolas", monospace;
+    font-weight: 800;
+}
+QPushButton#assistantCodeCopyButton {
+    min-width: 30px;
+    max-width: 30px;
+    min-height: 30px;
+    max-height: 30px;
+    padding: 0;
+    border: none;
+    border-radius: 8px;
+    background: transparent;
+    color: #d6d9dd;
+}
+QPushButton#assistantCodeCopyButton:hover {
+    background: #202326;
+    color: #ffffff;
+}
+QPlainTextEdit#assistantCodeText {
+    background: transparent;
+    border: none;
+    color: #f2f3f5;
+    padding: 0;
+    font-family: "IBM Plex Mono", "Consolas", monospace;
+    font-size: 11pt;
+    selection-background-color: #2b4c6f;
+}
 QLabel#toastLabel {
     background: #202326;
     border: 1px solid #3a3f44;
