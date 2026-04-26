@@ -6,6 +6,7 @@ Minimal local chat desktop client with a chat-first PyQt6 UI.
 import base64
 import json
 import mimetypes
+import re
 import sys
 import tempfile
 from math import ceil
@@ -557,6 +558,9 @@ TEXT_PREVIEW_SUFFIXES = {
     ".sql", ".toml", ".rs",
 }
 MAX_ATTACHMENT_TEXT_CHARS = 12000
+MAX_URLS_PER_MESSAGE = 4
+URL_RE = re.compile(r"https?://[^\s<>\]\)\"']+", re.IGNORECASE)
+TRAILING_URL_PUNCTUATION = ".,;:!?)]}\"'"
 
 
 class DeletableHistoryDelegate(QStyledItemDelegate):
@@ -2303,6 +2307,19 @@ class AgentChatWindow(QMainWindow):
         if len(content) > MAX_ATTACHMENT_TEXT_CHARS:
             content = content[:MAX_ATTACHMENT_TEXT_CHARS] + "\n\n[Truncated]"
         return content
+
+    def detect_urls(self, text):
+        urls = []
+        seen = set()
+        for match in URL_RE.finditer(text):
+            url = match.group(0).rstrip(TRAILING_URL_PUNCTUATION)
+            if url in seen:
+                continue
+            seen.add(url)
+            urls.append(url)
+            if len(urls) >= MAX_URLS_PER_MESSAGE:
+                break
+        return urls
 
     def sidebar_enter_event(self, event):
         self.sidebar_hover_timer.start()
