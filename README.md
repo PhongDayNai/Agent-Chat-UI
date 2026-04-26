@@ -1,17 +1,17 @@
 # Agent Chat UI
 
-Version: 1.0
+Version: 1.1
 
 Agent Chat UI is a PyQt6 desktop chat client for OpenAI-compatible chat
-completion APIs. The v1.0 release is a normal desktop chat app: choose a server
+completion APIs. The v1.1 release is a normal desktop chat app: choose a server
 URL, load models from the API, send messages, attach context, and stream
-responses in the UI.
-
-v1.0 is focused on public OpenAI-compatible endpoints, especially local
-servers. The default target is `http://localhost:8080`, and the app currently
-does not send an API key or authorization header. For that reason, it is best
-suited to local servers such as `llama-server` or other unauthenticated
+responses in the UI. v1.1 adds named API key support for authenticated
 OpenAI-compatible endpoints.
+
+The default target is still `http://localhost:8080`, so unauthenticated local
+servers such as `llama-server` keep working without an API key. For hosted or
+private endpoints, add a named API key from the sidebar, select it, then apply
+it before refreshing models or sending messages.
 
 Release v1.0 is available here:
 https://github.com/PhongDayNai/Agent-Chat-UI/releases/tag/v1.0
@@ -24,6 +24,7 @@ lightweight while still exposing the tools that make desktop chat useful:
 
 - a desktop chat interface for public OpenAI-compatible API endpoints
 - localhost-first defaults for unauthenticated local model servers
+- named API keys for authenticated OpenAI-compatible endpoints
 - model selection from the server's `/v1/models` endpoint
 - session prompts that lock in only when the first message is sent
 - optional terminal execution for local agent workflows
@@ -34,8 +35,13 @@ lightweight while still exposing the tools that make desktop chat useful:
 ## Features
 
 - **OpenAI-compatible API support**  
-  Connects to OpenAI-compatible chat completion servers. v1.0 calls public
-  endpoints directly and does not include API key support yet.
+  Connects to OpenAI-compatible chat completion servers. v1.1 can call public
+  endpoints directly or send a bearer token when a named API key is applied.
+
+- **Named API keys**  
+  Save API keys with required display names from the sidebar. The key menu only
+  shows saved names, and requests include `Authorization: Bearer <key>` only
+  after the selected key has been applied.
 
 - **Localhost-first defaults**  
   Uses `http://localhost:8080` by default, which matches common local servers
@@ -84,7 +90,7 @@ lightweight while still exposing the tools that make desktop chat useful:
 - Python 3.10+
 - `pip`
 - `venv`
-- An OpenAI-compatible chat completion server that does not require an API key
+- An OpenAI-compatible chat completion server, with or without API key auth
 
 The server is expected to expose:
 
@@ -100,7 +106,8 @@ http://localhost:8080
 
 ## Download
 
-Prebuilt v1.0 packages are available from the GitHub release page:
+Prebuilt v1.0 packages are available from the GitHub release page. v1.1 source
+is in this branch; publish v1.1 packages when cutting the release:
 
 https://github.com/PhongDayNai/Agent-Chat-UI/releases/tag/v1.0
 
@@ -129,8 +136,9 @@ python agent_chat_ui.py
 ```
 
 The app will check `/health`, load models from `/v1/models`, and enable sending
-once a model is available. v1.0 does not send an API key, so the configured
-server must be reachable without authentication.
+once a model is available. If your endpoint requires authentication, open the
+sidebar, save an API key with a name, select that name, apply it, then refresh
+models.
 
 ## Terminal Agent Usage
 
@@ -180,6 +188,7 @@ custom packaging.
 Important sections:
 
 - `server`: base URL and saved server URL history
+- `api_keys`: saved API key names, values, and selected key ID
 - `session_prompt`: current prompt and prompt history
 - `agent_terminal`: terminal enabled state, permission mode, and default command
   allowlist
@@ -188,7 +197,9 @@ Important sections:
 - `assistant_rendering`: streaming debounce settings
 - `ui`: panel pinning, composer sizing, and display preferences
 
-Most settings can be changed from the app UI and are saved automatically.
+Most settings can be changed from the app UI and are saved automatically. API
+keys are stored in the local user config JSON for convenience; this is not a
+secure OS keychain or vault.
 
 ## File Context
 
@@ -219,8 +230,8 @@ config.json           # optional legacy local configuration
 
 - This app is optimized for local workflows and small-to-medium models, not for
   cloud account management.
-- v1.0 does not support API keys yet. Use it with localhost or another
-  unauthenticated OpenAI-compatible endpoint.
+- Select `No API key` for localhost or another unauthenticated
+  OpenAI-compatible endpoint.
 - Keep session prompts short when using small context models.
 - Terminal output and fetched URL content are truncated by design to avoid
   overwhelming the model context.
