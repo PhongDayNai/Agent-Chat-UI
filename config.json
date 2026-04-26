@@ -11,6 +11,11 @@
     "value": "",
     "history": []
   },
+  "api_keys": {
+    "enabled": true,
+    "selected_id": "",
+    "items": []
+  },
   "agent_terminal": {
     "enabled": true,
     "permission": "full_access",

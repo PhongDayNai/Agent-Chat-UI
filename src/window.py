@@ -3,13 +3,14 @@
 import base64
 import json
 import mimetypes
+import uuid
 from datetime import datetime
 from io import BytesIO
 from pathlib import Path
 
 import requests
 from PyQt6.QtCore import QByteArray, QBuffer, QEasingCurve, QEvent, QIODevice, QPoint, QPropertyAnimation, QRectF, QSize, QTimer, QUrl, Qt
-from PyQt6.QtGui import QDesktopServices, QGuiApplication, QIcon, QImage, QPainter, QPixmap
+from PyQt6.QtGui import QDesktopServices, QFontMetrics, QGuiApplication, QIcon, QImage, QPainter, QPixmap
 from PyQt6.QtSvg import QSvgRenderer
 from PyQt6.QtWidgets import (
     QApplication,
@@ -90,6 +91,7 @@ TERMINAL_PERMISSION_COLORS = {
     TERMINAL_PERMISSION_FULL_ACCESS: "#d5c537",
 }
 SIDEBAR_DROPDOWN_TEXT_INSET = "  "
+SIDEBAR_ELIDE_WIDTH = 320
 
 class AgentChatWindow(QMainWindow):
     def __init__(self):
@@ -114,6 +116,7 @@ class AgentChatWindow(QMainWindow):
         sampling_config = self.config.get("sampling", {})
         ui_config = self.config.get("ui", {})
         workspace_config = self.config.get("workspace", {})
+        api_keys_config = self.config.get("api_keys", {})
 
         self.server_enabled = bool(server_config.get("enabled", True))
         configured_base_url = self.normalize_base_url(server_config.get("base_url", ""))
@@ -124,6 +127,10 @@ class AgentChatWindow(QMainWindow):
             normalizer=self.normalize_base_url,
         )
         self.base_url_history = self.add_history_value(self.base_url_history, self.base_url)
+        self.api_keys_enabled = bool(api_keys_config.get("enabled", True))
+        self.api_keys = list(api_keys_config.get("items", []))
+        self.selected_api_key_id = str(api_keys_config.get("selected_id", "")).strip()
+        self.pending_api_key_id = self.selected_api_key_id
         self.session_prompt_enabled = bool(session_prompt_config.get("enabled", True))
         self.session_prompt_history = self.clean_history(session_prompt_config.get("history", []))
         self.initial_session_prompt = str(session_prompt_config.get("value", "")).strip()
@@ -163,8 +170,8 @@ class AgentChatWindow(QMainWindow):
         self.sidebar_pinned = self.pin_panel
         self.sidebar_open = False
         self.sidebar_collapsed_width = 68
-        self.sidebar_scrollbar_allowance = 60
-        self.sidebar_expanded_max_width = 380
+        self.sidebar_scrollbar_allowance = 90
+        self.sidebar_expanded_max_width = 320
         self.default_window_width = 1180
         self.default_window_height = 820
         self.sticky_code_header = None
@@ -195,6 +202,11 @@ class AgentChatWindow(QMainWindow):
                 "enabled": True,
                 "value": "",
                 "history": [],
+            },
+            "api_keys": {
+                "enabled": True,
+                "selected_id": "",
+                "items": [],
             },
             "agent_terminal": {
                 "enabled": True,
@@ -246,6 +258,11 @@ class AgentChatWindow(QMainWindow):
                 "value": self.current_session_prompt_value(),
                 "history": self.session_prompt_history,
             },
+            "api_keys": {
+                "enabled": self.api_keys_enabled,
+                "selected_id": self.selected_api_key_id,
+                "items": self.api_keys,
+            },
             "agent_terminal": {
                 "enabled": self.agent_terminal_enabled,
                 "permission": self.agent_terminal_permission,
@@ -295,6 +312,7 @@ class AgentChatWindow(QMainWindow):
     def normalize_config(self, payload, default_config):
         server_payload = payload.get("server") if isinstance(payload.get("server"), dict) else {}
         session_payload = payload.get("session_prompt") if isinstance(payload.get("session_prompt"), dict) else {}
+        api_keys_payload = payload.get("api_keys") if isinstance(payload.get("api_keys"), dict) else {}
         terminal_payload = payload.get("agent_terminal") if isinstance(payload.get("agent_terminal"), dict) else {}
         workspace_payload = payload.get("workspace") if isinstance(payload.get("workspace"), dict) else {}
         sampling_payload = payload.get("sampling") if isinstance(payload.get("sampling"), dict) else {}
@@ -318,6 +336,11 @@ class AgentChatWindow(QMainWindow):
                 "enabled": session_payload.get("enabled", payload.get("session_prompt_enabled", default_config["session_prompt"]["enabled"])),
                 "value": session_payload.get("value", payload.get("session_prompt", default_config["session_prompt"]["value"])),
                 "history": session_payload.get("history", payload.get("session_prompts", default_config["session_prompt"]["history"])),
+            },
+            "api_keys": {
+                **default_config["api_keys"],
+                **api_keys_payload,
+                **self.normalize_api_keys_config(api_keys_payload, default_config["api_keys"]),
             },
             "agent_terminal": {
                 **default_config["agent_terminal"],
@@ -350,6 +373,31 @@ class AgentChatWindow(QMainWindow):
                     payload.get("composer_max_lines", default_config["ui"]["composer_max_lines"]),
                 ),
             },
+        }
+
+    def normalize_api_keys_config(self, payload, default_config):
+        items = []
+        raw_items = payload.get("items", default_config.get("items", []))
+        if isinstance(raw_items, list):
+            for raw_item in raw_items:
+                if not isinstance(raw_item, dict):
+                    continue
+                name = str(raw_item.get("name", "")).strip()
+                value = str(raw_item.get("value", "")).strip()
+                if not name or not value:
+                    continue
+                key_id = str(raw_item.get("id", "")).strip() or uuid.uuid4().hex
+                if any(item["id"] == key_id for item in items):
+                    key_id = uuid.uuid4().hex
+                items.append({"id": key_id, "name": name, "value": value})
+
+        selected_id = str(payload.get("selected_id", default_config.get("selected_id", ""))).strip()
+        if selected_id and not any(item["id"] == selected_id for item in items):
+            selected_id = ""
+        return {
+            "enabled": bool(payload.get("enabled", default_config.get("enabled", True))),
+            "selected_id": selected_id,
+            "items": items,
         }
 
     def normalize_composer_max_lines(self, value):
@@ -450,6 +498,13 @@ class AgentChatWindow(QMainWindow):
             return values
         return [value] + [item for item in values if item != value]
 
+    def set_elided_label_text(self, label, text, width=SIDEBAR_ELIDE_WIDTH):
+        text = str(text or "")
+        metrics = QFontMetrics(label.font())
+        elided = metrics.elidedText(text, Qt.TextElideMode.ElideRight, width)
+        label.setText(elided)
+        label.setToolTip(text if elided != text else "")
+
     def current_session_prompt_value(self):
         if self.session_prompt_locked:
             return self.session_system_prompt
@@ -524,7 +579,9 @@ class AgentChatWindow(QMainWindow):
             self.workspace_input.setText(self.workspace_path_config)
             self.workspace_input.blockSignals(False)
         if hasattr(self, "workspace_detail"):
-            self.workspace_detail.setText(f"Terminal commands run in: {self.workspace_path}")
+            text = f"Terminal commands run in: {self.workspace_path}"
+            self.workspace_detail.setText(text)
+            self.workspace_detail.setToolTip("")
 
     def configure_responsive_metrics(self):
         screen = QGuiApplication.primaryScreen()
@@ -534,13 +591,10 @@ class AgentChatWindow(QMainWindow):
         available = screen.availableGeometry()
         self.default_window_width = max(520, min(1180, available.width() - 40))
         self.default_window_height = max(420, min(820, available.height() - 40))
-        self.sidebar_expanded_max_width = max(320, min(420, int(available.width() * 0.4)))
+        self.sidebar_expanded_max_width = 380
 
     def target_sidebar_width(self):
-        available_width = self.width() or self.default_window_width
-        responsive_width = int(available_width * 0.34)
-        content_width = max(300, min(self.sidebar_expanded_max_width, responsive_width))
-        return content_width + self.sidebar_scrollbar_allowance
+        return self.sidebar_expanded_max_width + self.sidebar_scrollbar_allowance
 
     def build_ui(self):
         central = QWidget()
@@ -600,6 +654,7 @@ class AgentChatWindow(QMainWindow):
         root.addLayout(content_stack, 1)
 
         self.build_toast()
+        self.refresh_api_key_ui()
         self.refresh_workspace_ui()
         self.refresh_session_prompt_ui()
         self.refresh_rendering_ui()
@@ -804,12 +859,100 @@ class AgentChatWindow(QMainWindow):
         self.base_url_input.currentTextChanged.connect(self.on_base_url_text_changed)
         server_section_layout.addWidget(self.base_url_input)
 
-        self.base_url_detail = QLabel(f"Base URL for OpenAI-compatible server: {self.base_url}")
+        self.base_url_detail = QLabel("")
         self.base_url_detail.setObjectName("subtleLabel")
         self.base_url_detail.setWordWrap(True)
         server_section_layout.addWidget(self.base_url_detail)
+        self.base_url_detail.setText(f"Base URL for OpenAI-compatible server: {self.base_url}")
         self.server_section.setVisible(self.server_enabled)
         layout.addWidget(self.server_section)
+
+        self.api_keys_section = QWidget()
+        api_keys_section_layout = QVBoxLayout(self.api_keys_section)
+        api_keys_section_layout.setContentsMargins(0, 0, 0, 0)
+        api_keys_section_layout.setSpacing(10)
+
+        api_keys_heading = QLabel("API keys")
+        api_keys_heading.setObjectName("sectionLabel")
+        api_keys_header_row = QHBoxLayout()
+        api_keys_header_row.setContentsMargins(0, 0, 0, 0)
+        api_keys_header_row.setSpacing(8)
+        api_keys_header_row.addWidget(api_keys_heading)
+        api_keys_header_row.addStretch()
+
+        self.api_key_history_button = QPushButton("▾")
+        self.api_key_history_button.setObjectName("fieldIconButton")
+        self.api_key_history_button.setToolTip("Select saved API key")
+        self.api_key_history_button.clicked.connect(self.show_api_key_menu)
+        api_keys_header_row.addWidget(self.api_key_history_button)
+
+        self.apply_api_key_button = QPushButton("✓")
+        self.apply_api_key_button.setObjectName("fieldIconButton")
+        self.apply_api_key_button.setToolTip("Apply selected API key")
+        self.apply_api_key_button.clicked.connect(self.apply_selected_api_key)
+        api_keys_header_row.addWidget(self.apply_api_key_button)
+        api_keys_section_layout.addLayout(api_keys_header_row)
+
+        self.api_key_active_badge = QLabel("")
+        self.api_key_active_badge.setObjectName("sessionPromptBadge")
+        self.api_key_active_badge.setWordWrap(False)
+        self.api_key_active_badge.setMinimumWidth(0)
+        self.api_key_active_badge.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        api_keys_section_layout.addWidget(self.api_key_active_badge)
+
+        self.new_api_key_button = QPushButton("New key")
+        self.new_api_key_button.setObjectName("ghostButton")
+        self.new_api_key_button.clicked.connect(self.toggle_new_api_key_panel)
+        api_keys_section_layout.addWidget(self.new_api_key_button)
+
+        self.new_api_key_panel = QFrame()
+        self.new_api_key_panel.setObjectName("terminalPanel")
+        new_api_key_panel_layout = QVBoxLayout(self.new_api_key_panel)
+        new_api_key_panel_layout.setContentsMargins(12, 12, 12, 12)
+        new_api_key_panel_layout.setSpacing(10)
+
+        new_api_key_header_row = QHBoxLayout()
+        new_api_key_header_row.setContentsMargins(0, 0, 0, 0)
+        new_api_key_header_row.setSpacing(8)
+        new_api_key_title = QLabel("New API key")
+        new_api_key_title.setObjectName("sectionLabel")
+        new_api_key_header_row.addWidget(new_api_key_title)
+        new_api_key_header_row.addStretch()
+
+        self.save_new_api_key_button = QPushButton("✓")
+        self.save_new_api_key_button.setObjectName("fieldIconButton")
+        self.save_new_api_key_button.setToolTip("Save and apply new API key")
+        self.save_new_api_key_button.clicked.connect(self.save_new_api_key)
+        new_api_key_header_row.addWidget(self.save_new_api_key_button)
+        new_api_key_panel_layout.addLayout(new_api_key_header_row)
+
+        api_key_form = QFormLayout()
+        api_key_form.setSpacing(10)
+        api_key_form.setLabelAlignment(Qt.AlignmentFlag.AlignLeft)
+
+        self.api_key_name_input = QLineEdit()
+        self.api_key_name_input.setPlaceholderText("Display name")
+        self.api_key_name_input.returnPressed.connect(self.save_new_api_key)
+        api_key_form.addRow("Name", self.api_key_name_input)
+
+        self.api_key_value_input = QLineEdit()
+        self.api_key_value_input.setEchoMode(QLineEdit.EchoMode.Password)
+        self.api_key_value_input.setPlaceholderText("Paste API key")
+        self.api_key_value_input.returnPressed.connect(self.save_new_api_key)
+        api_key_form.addRow("Key", self.api_key_value_input)
+        new_api_key_panel_layout.addLayout(api_key_form)
+        api_keys_section_layout.addWidget(self.new_api_key_panel)
+        self.new_api_key_panel.hide()
+        self.new_api_key_panel.setMaximumHeight(16777215)
+        self.new_api_key_panel_expanded = False
+        self.new_api_key_panel_animation = None
+
+        self.api_key_detail = QLabel("")
+        self.api_key_detail.setObjectName("subtleLabel")
+        self.api_key_detail.setWordWrap(False)
+        api_keys_section_layout.addWidget(self.api_key_detail)
+        self.api_keys_section.setVisible(self.api_keys_enabled)
+        layout.addWidget(self.api_keys_section)
 
         self.workspace_section = QWidget()
         workspace_section_layout = QVBoxLayout(self.workspace_section)
@@ -1421,6 +1564,7 @@ class AgentChatWindow(QMainWindow):
         if hasattr(self, "default_permissions_detail"):
             allowed = ", ".join(self.default_permissions)
             self.default_permissions_detail.setText(f"Default commands: {allowed}")
+            self.default_permissions_detail.setToolTip("")
         if hasattr(self, "agent_terminal_section"):
             self.agent_terminal_section.setVisible(self.agent_terminal_enabled)
 
@@ -1830,12 +1974,13 @@ class AgentChatWindow(QMainWindow):
         try:
             health_url = self.build_server_url("/health")
             models_url = self.build_server_url("/v1/models")
-            health_response = requests.get(health_url, timeout=2)
+            headers = self.auth_headers()
+            health_response = requests.get(health_url, headers=headers, timeout=2)
             if health_response.status_code != 200:
                 self.set_disconnected_state(f"OpenAI-compatible server health returned HTTP {health_response.status_code}.")
                 return
 
-            response = requests.get(models_url, timeout=2)
+            response = requests.get(models_url, headers=headers, timeout=2)
             if response.status_code != 200:
                 self.set_disconnected_state(f"OpenAI-compatible server returned HTTP {response.status_code}.")
                 return
@@ -1917,6 +2062,220 @@ class AgentChatWindow(QMainWindow):
 
     def build_server_url(self, path):
         return f"{self.base_url}{path}"
+
+    def current_api_key_item(self):
+        selected_id = self.selected_api_key_id.strip()
+        if not selected_id:
+            return None
+        for item in self.api_keys:
+            if item.get("id") == selected_id:
+                return item
+        return None
+
+    def pending_api_key_item(self):
+        pending_id = self.pending_api_key_id.strip()
+        if not pending_id:
+            return None
+        for item in self.api_keys:
+            if item.get("id") == pending_id:
+                return item
+        return None
+
+    def current_api_key_value(self):
+        item = self.current_api_key_item()
+        if not item:
+            return ""
+        return str(item.get("value", "")).strip()
+
+    def auth_headers(self):
+        api_key = self.current_api_key_value()
+        if not api_key:
+            return {}
+        return {"Authorization": f"Bearer {api_key}"}
+
+    def refresh_api_key_ui(self):
+        pending_item = self.pending_api_key_item()
+        if pending_item:
+            pending_label = str(pending_item.get("name", "")).strip()
+            selected_text = pending_label
+            history_tooltip = f"Selection: {pending_label}"
+        elif self.pending_api_key_id:
+            self.pending_api_key_id = ""
+            selected_text = "No API key"
+            history_tooltip = "Selection: No API key"
+        else:
+            selected_text = "No API key"
+            history_tooltip = "Selection: No API key"
+        applied = self.pending_api_key_id == self.selected_api_key_id
+        detail = "Applied to requests." if applied else "Press ✓ to apply this selection to requests."
+        if hasattr(self, "api_key_active_badge"):
+            self.set_elided_label_text(self.api_key_active_badge, selected_text)
+        if hasattr(self, "api_key_detail"):
+            self.set_elided_label_text(self.api_key_detail, detail)
+        if hasattr(self, "api_key_history_button"):
+            self.api_key_history_button.setEnabled(bool(self.api_keys))
+            self.api_key_history_button.setToolTip(history_tooltip)
+        if hasattr(self, "apply_api_key_button"):
+            self.apply_api_key_button.setProperty("applied", applied)
+            self.apply_api_key_button.setToolTip(
+                "Selection is already applied" if applied else "Apply selected API key"
+            )
+            self.apply_api_key_button.style().unpolish(self.apply_api_key_button)
+            self.apply_api_key_button.style().polish(self.apply_api_key_button)
+        if hasattr(self, "new_api_key_button"):
+            self.new_api_key_button.setText("Hide new key" if self.new_api_key_panel_expanded else "New key")
+        if hasattr(self, "api_keys_section"):
+            self.api_keys_section.setVisible(self.api_keys_enabled)
+
+    def show_api_key_menu(self):
+        if not self.api_keys:
+            return
+        menu = QMenu(self)
+        menu.setObjectName("historyMenu")
+        current_id = self.pending_api_key_id
+
+        no_key_action = menu.addAction("No API key")
+        no_key_action.setEnabled(bool(current_id))
+        if current_id:
+            no_key_action.triggered.connect(lambda _checked=False: self.stage_api_key(""))
+
+        for item in self.api_keys:
+            key_id = item.get("id", "")
+            name = item.get("name", "")
+            action = menu.addAction(name)
+            is_current = key_id == current_id
+            action.setEnabled(not is_current)
+            if not is_current:
+                action.triggered.connect(lambda _checked=False, value=key_id: self.stage_api_key(value))
+
+        delete_menu = menu.addMenu("Delete saved key")
+        for item in self.api_keys:
+            key_id = item.get("id", "")
+            name = item.get("name", "")
+            action = delete_menu.addAction(name)
+            action.triggered.connect(lambda _checked=False, value=key_id: self.delete_api_key(value))
+
+        menu.exec(self.api_key_history_button.mapToGlobal(self.api_key_history_button.rect().bottomLeft()))
+
+    def stage_api_key(self, key_id):
+        key_id = str(key_id or "").strip()
+        if key_id and not any(item.get("id") == key_id for item in self.api_keys):
+            return
+        self.pending_api_key_id = key_id
+        self.refresh_api_key_ui()
+
+    def apply_selected_api_key(self):
+        if self.pending_api_key_id and not any(item.get("id") == self.pending_api_key_id for item in self.api_keys):
+            self.pending_api_key_id = ""
+        if self.selected_api_key_id == self.pending_api_key_id:
+            self.refresh_api_key_ui()
+            return
+        self.selected_api_key_id = self.pending_api_key_id
+        self.refresh_api_key_ui()
+        self.save_config()
+        item = self.current_api_key_item()
+        label = item.get("name", "") if item else "No API key"
+        self.set_status_message(f"Applied API key: {label}")
+        self.show_toast("API key applied")
+        self.refresh_server_state()
+
+    def save_new_api_key(self):
+        name = self.api_key_name_input.text().strip() if hasattr(self, "api_key_name_input") else ""
+        value = self.api_key_value_input.text().strip() if hasattr(self, "api_key_value_input") else ""
+        if not name:
+            message = "Enter a name for this API key."
+            self.set_status_message(message)
+            if hasattr(self, "api_key_detail"):
+                self.api_key_detail.setText(message)
+            if hasattr(self, "api_key_name_input"):
+                self.api_key_name_input.setFocus()
+            return
+        if not value:
+            message = "Enter an API key."
+            self.set_status_message(message)
+            if hasattr(self, "api_key_detail"):
+                self.api_key_detail.setText(message)
+            if hasattr(self, "api_key_value_input"):
+                self.api_key_value_input.setFocus()
+            return
+
+        existing_item = next((item for item in self.api_keys if item.get("name") == name), None)
+        if existing_item:
+            existing_item["value"] = value
+            self.pending_api_key_id = existing_item["id"]
+        else:
+            item = {"id": uuid.uuid4().hex, "name": name, "value": value}
+            self.api_keys.insert(0, item)
+            self.pending_api_key_id = item["id"]
+
+        self.selected_api_key_id = self.pending_api_key_id
+        self.api_key_name_input.clear()
+        self.api_key_value_input.clear()
+        self.set_new_api_key_panel_expanded(False)
+        self.refresh_api_key_ui()
+        self.save_config()
+        self.set_status_message(f"API key saved: {name}")
+        self.show_toast("API key saved")
+        self.refresh_server_state()
+
+    def delete_api_key(self, key_id):
+        key_id = str(key_id or "").strip()
+        if not key_id:
+            return
+        was_selected = self.selected_api_key_id == key_id
+        self.api_keys = [item for item in self.api_keys if item.get("id") != key_id]
+        if was_selected:
+            self.selected_api_key_id = ""
+        if self.pending_api_key_id == key_id:
+            self.pending_api_key_id = self.selected_api_key_id
+        self.refresh_api_key_ui()
+        self.save_config()
+        if was_selected:
+            self.refresh_server_state()
+
+    def toggle_new_api_key_panel(self):
+        self.set_new_api_key_panel_expanded(not self.new_api_key_panel_expanded)
+
+    def set_new_api_key_panel_expanded(self, expanded):
+        expanded = bool(expanded)
+        if not hasattr(self, "new_api_key_panel"):
+            return
+        if self.new_api_key_panel_expanded == expanded:
+            self.refresh_api_key_ui()
+            return
+        self.new_api_key_panel_expanded = expanded
+        self.animate_new_api_key_panel(expanded)
+        self.refresh_api_key_ui()
+        if expanded and hasattr(self, "api_key_name_input"):
+            QTimer.singleShot(230, self.api_key_name_input.setFocus)
+
+    def animate_new_api_key_panel(self, expanded):
+        if self.new_api_key_panel_animation is not None:
+            self.new_api_key_panel_animation.stop()
+        if expanded:
+            self.new_api_key_panel.show()
+            self.new_api_key_panel.setMaximumHeight(0)
+            start_height = 0
+            end_height = max(1, self.new_api_key_panel.sizeHint().height())
+        else:
+            start_height = max(1, self.new_api_key_panel.height())
+            end_height = 0
+        self.new_api_key_panel_animation = QPropertyAnimation(self.new_api_key_panel, b"maximumHeight", self)
+        self.new_api_key_panel_animation.setDuration(220)
+        self.new_api_key_panel_animation.setEasingCurve(QEasingCurve.Type.InOutCubic)
+        self.new_api_key_panel_animation.setStartValue(start_height)
+        self.new_api_key_panel_animation.setEndValue(end_height)
+        self.new_api_key_panel_animation.finished.connect(
+            lambda expanded=expanded: self.finish_new_api_key_panel_animation(expanded)
+        )
+        self.new_api_key_panel_animation.start()
+
+    def finish_new_api_key_panel_animation(self, expanded):
+        if expanded:
+            self.new_api_key_panel.setMaximumHeight(16777215)
+        else:
+            self.new_api_key_panel.hide()
+            self.new_api_key_panel.setMaximumHeight(16777215)
 
     def on_base_url_text_changed(self, _text):
         self.update_base_url_input_state()
@@ -2181,6 +2540,7 @@ class AgentChatWindow(QMainWindow):
             temperature=self.temperature_spin.value(),
             top_p=self.top_p_spin.value(),
             top_k=self.top_k_spin.value(),
+            api_key=self.current_api_key_value(),
             agent_terminal_enabled=self.agent_terminal_enabled,
             agent_terminal_permission=self.agent_terminal_permission,
             default_permissions=self.default_permissions,

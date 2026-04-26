@@ -47,6 +47,7 @@ class ChatCompletionWorker(QThread):
         self.temperature = 0.7
         self.top_p = 0.9
         self.top_k = 40
+        self.api_key = ""
         self.full_response = ""
         self.full_thinking = ""
         self.agent_terminal_enabled = False
@@ -64,6 +65,7 @@ class ChatCompletionWorker(QThread):
         temperature,
         top_p,
         top_k,
+        api_key="",
         agent_terminal_enabled=False,
         agent_terminal_permission="default",
         default_permissions=None,
@@ -75,6 +77,7 @@ class ChatCompletionWorker(QThread):
         self.temperature = temperature
         self.top_p = top_p
         self.top_k = top_k
+        self.api_key = str(api_key or "").strip()
         self.agent_terminal_enabled = bool(agent_terminal_enabled)
         self.agent_terminal_permission = agent_terminal_permission
         self.default_permissions = {
@@ -175,7 +178,8 @@ class ChatCompletionWorker(QThread):
         }
         response_text = ""
         chat_url = f"{self.base_url}/v1/chat/completions"
-        with requests.post(chat_url, json=payload, stream=True, timeout=120) as response:
+        headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else None
+        with requests.post(chat_url, json=payload, headers=headers, stream=True, timeout=120) as response:
             if response.status_code != 200:
                 detail = response.text.strip() or f"HTTP {response.status_code}"
                 self.error_occurred.emit(f"Request failed: {detail}")
