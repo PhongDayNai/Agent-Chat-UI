@@ -2,23 +2,28 @@
 
 Version: 1.0
 
-Agent Chat UI is a PyQt6 desktop client for local OpenAI-compatible chat
-completion servers. It is designed for running smaller local models with a
-comfortable desktop workflow, a low-friction first prompt, and optional local
-agent features such as terminal command execution.
+Agent Chat UI is a PyQt6 desktop chat client for OpenAI-compatible chat
+completion APIs. The v1.0 release is a normal desktop chat app: choose a server
+URL, load models from the API, send messages, attach context, and stream
+responses in the UI.
 
-The goal is not to be a hosted chat product. The goal is to make local model
-usage feel practical: pick a model, optionally set a short session prompt, send
-messages, attach files, and let the assistant request terminal commands when
-that is useful for local coding or inspection tasks.
+v1.0 is focused on public OpenAI-compatible endpoints, especially local
+servers. The default target is `http://localhost:8080`, and the app currently
+does not send an API key or authorization header. For that reason, it is best
+suited to local servers such as `llama-server` or other unauthenticated
+OpenAI-compatible endpoints.
+
+Release v1.0 is available here:
+https://github.com/PhongDayNai/Agent-Chat-UI/releases/tag/v1.0
 
 ## Why this exists
 
-Small local models often work best when the starting context is compact. This
-app keeps the beginning of a session lightweight while still exposing the tools
-that make local work useful:
+Small local models and simple OpenAI-compatible servers often work best when
+the client stays straightforward. This app keeps the beginning of a session
+lightweight while still exposing the tools that make desktop chat useful:
 
-- a desktop chat interface for local OpenAI-compatible servers
+- a desktop chat interface for public OpenAI-compatible API endpoints
+- localhost-first defaults for unauthenticated local model servers
 - model selection from the server's `/v1/models` endpoint
 - session prompts that lock in only when the first message is sent
 - optional terminal execution for local agent workflows
@@ -28,9 +33,13 @@ that make local work useful:
 
 ## Features
 
-- **OpenAI-compatible local server support**  
-  Connects to a local server such as `llama-server` at
-  `http://localhost:8080` by default.
+- **OpenAI-compatible API support**  
+  Connects to OpenAI-compatible chat completion servers. v1.0 calls public
+  endpoints directly and does not include API key support yet.
+
+- **Localhost-first defaults**  
+  Uses `http://localhost:8080` by default, which matches common local servers
+  such as `llama-server`.
 
 - **Model picker**  
   Loads available models from `/v1/models` and lets you switch models from the
@@ -75,7 +84,7 @@ that make local work useful:
 - Python 3.10+
 - `pip`
 - `venv`
-- A local OpenAI-compatible chat completion server
+- An OpenAI-compatible chat completion server that does not require an API key
 
 The server is expected to expose:
 
@@ -89,6 +98,19 @@ The default base URL is:
 http://localhost:8080
 ```
 
+## Download
+
+Prebuilt v1.0 packages are available from the GitHub release page:
+
+https://github.com/PhongDayNai/Agent-Chat-UI/releases/tag/v1.0
+
+Available artifacts:
+
+- Windows: `agent-chat-ui-1.0-windows-x86_64.exe`
+- Linux AppImage: `agent-chat-ui-1.0-x86_64.AppImage`
+- Linux Debian package: `agent-chat-ui_1.0_amd64.deb`
+- Linux tarball: `agent-chat-ui-1.0-linux-x86_64.tar.gz`
+
 ## Setup
 
 ```bash
@@ -100,14 +122,15 @@ pip install -r requirements.txt
 
 ## Run
 
-Start your local OpenAI-compatible server first, then run:
+Start your OpenAI-compatible server first, then run:
 
 ```bash
 python agent_chat_ui.py
 ```
 
 The app will check `/health`, load models from `/v1/models`, and enable sending
-once a model is available.
+once a model is available. v1.0 does not send an API key, so the configured
+server must be reachable without authentication.
 
 ## Terminal Agent Usage
 
@@ -196,6 +219,8 @@ config.json           # optional legacy local configuration
 
 - This app is optimized for local workflows and small-to-medium models, not for
   cloud account management.
+- v1.0 does not support API keys yet. Use it with localhost or another
+  unauthenticated OpenAI-compatible endpoint.
 - Keep session prompts short when using small context models.
 - Terminal output and fetched URL content are truncated by design to avoid
   overwhelming the model context.
