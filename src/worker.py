@@ -22,6 +22,9 @@ from constants import (
 class ChatCompletionWorker(QThread):
     token_received = pyqtSignal(str)
     thinking_received = pyqtSignal(str)
+    terminal_command_started = pyqtSignal(str, str)
+    terminal_log_received = pyqtSignal(str)
+    terminal_command_finished = pyqtSignal(str)
     generation_started = pyqtSignal()
     generation_finished = pyqtSignal(bool, bool, str, str)
     error_occurred = pyqtSignal(str)
@@ -71,8 +74,10 @@ class ChatCompletionWorker(QThread):
                     success = True
                     break
 
+                self.terminal_command_started.emit(command, "Bash")
                 terminal_result = self.run_terminal_command(command)
                 rendered_result = self.render_terminal_result(command, terminal_result)
+                self.terminal_command_finished.emit(self.terminal_status_text(terminal_result))
                 if self.stop_requested:
                     stopped = True
                     break
@@ -186,6 +191,7 @@ class ChatCompletionWorker(QThread):
             while process.poll() is None or selector.get_map():
                 if self.stop_requested:
                     self.terminate_terminal_process(process)
+                    self.terminal_log_received.emit("\n[stopped]\n")
                     return {
                         "exit_code": None,
                         "timed_out": False,
@@ -216,6 +222,7 @@ class ChatCompletionWorker(QThread):
                     if key.data == "stderr":
                         text = f"[stderr] {text}"
                     output_parts.append(text)
+                    self.terminal_log_received.emit(text)
 
             return {
                 "exit_code": process.returncode,

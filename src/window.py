@@ -1432,6 +1432,9 @@ class AgentChatWindow(QMainWindow):
         )
         self.worker.token_received.connect(self.on_token_received)
         self.worker.thinking_received.connect(self.on_thinking_received)
+        self.worker.terminal_command_started.connect(self.on_terminal_command_started)
+        self.worker.terminal_log_received.connect(self.on_terminal_log_received)
+        self.worker.terminal_command_finished.connect(self.on_terminal_command_finished)
         self.worker.generation_started.connect(self.on_generation_started)
         self.worker.generation_finished.connect(self.on_generation_finished)
         self.worker.error_occurred.connect(self.on_error)
@@ -1638,6 +1641,23 @@ class AgentChatWindow(QMainWindow):
     def on_thinking_received(self, token):
         if self.current_assistant_card is not None:
             self.current_assistant_card.append_thinking(token, self.show_thinking_checkbox.isChecked())
+        self.scroll_to_bottom()
+
+    def on_terminal_command_started(self, command, shell_name):
+        if self.current_assistant_card is not None:
+            self.current_assistant_card.stop_loading()
+            self.current_assistant_card.start_terminal_command(command, shell_name)
+        self.scroll_to_bottom()
+
+    def on_terminal_log_received(self, text):
+        if self.current_assistant_card is not None:
+            self.current_assistant_card.stop_loading()
+            self.current_assistant_card.append_terminal_log(text)
+        self.scroll_to_bottom()
+
+    def on_terminal_command_finished(self, status):
+        if self.current_assistant_card is not None:
+            self.current_assistant_card.finish_terminal_command(status)
         self.scroll_to_bottom()
 
     def on_generation_finished(self, success, stopped, full_response, _full_thinking):

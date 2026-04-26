@@ -1174,6 +1174,21 @@ class MessageCard(QFrame):
     def append_text(self, token):
         self.update_text(self.raw_text + token)
 
+    def start_terminal_command(self, command, shell_name):
+        if self.role != "assistant":
+            return
+        self.append_text(f"\n\n```terminal\n$ {command}\n")
+
+    def append_terminal_log(self, text):
+        if self.role != "assistant":
+            return
+        self.append_text(text)
+
+    def finish_terminal_command(self, status):
+        if self.role != "assistant":
+            return
+        self.append_text(f"\n[{status}]\n```\n")
+
     def append_thinking(self, token, visible):
         if self.role != "assistant":
             return
