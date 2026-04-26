@@ -1,7 +1,10 @@
 """Streaming chat completion worker."""
 
+import base64
 import json
+import ntpath
 import os
+import queue
 import selectors
 import shlex
 import signal
@@ -73,7 +76,11 @@ class ChatCompletionWorker(QThread):
         self.top_k = top_k
         self.agent_terminal_enabled = bool(agent_terminal_enabled)
         self.agent_terminal_permission = agent_terminal_permission
-        self.default_permissions = set(default_permissions or [])
+        self.default_permissions = {
+            self.normalize_terminal_command_key(command)
+            for command in (default_permissions or [])
+            if self.normalize_terminal_command_key(command)
+        }
         self.terminal_cwd = terminal_cwd or APP_WORKSPACE
 
     def run(self):
@@ -209,6 +216,8 @@ class ChatCompletionWorker(QThread):
         return (match.group(1) or match.group(2) or "").strip()
 
     def terminal_command_key(self, command):
+        if IS_WINDOWS:
+            return self.windows_terminal_command_key(command)
         try:
             parts = shlex.split(command)
         except ValueError:
@@ -217,11 +226,51 @@ class ChatCompletionWorker(QThread):
             return ""
         return os.path.basename(parts[0])
 
+    def windows_terminal_command_key(self, command):
+        command = (command or "").lstrip()
+        if not command:
+            return ""
+        for operator in ("&", "."):
+            if command == operator:
+                return ""
+            if command.startswith(operator) and command[1:2].isspace():
+                command = command[1:].lstrip()
+                break
+        token = self.windows_terminal_first_token(command)
+        if not token:
+            return ""
+        return ntpath.basename(token.rstrip("\\/"))
+
+    def windows_terminal_first_token(self, command):
+        quote = command[:1]
+        if quote in ("'", '"'):
+            token = []
+            index = 1
+            while index < len(command):
+                char = command[index]
+                if char == "`" and index + 1 < len(command):
+                    token.append(command[index + 1])
+                    index += 2
+                    continue
+                if char == quote:
+                    return "".join(token)
+                token.append(char)
+                index += 1
+            return "".join(token)
+        return command.split(maxsplit=1)[0].strip("'\"")
+
+    def normalize_terminal_command_key(self, command_key):
+        command_key = str(command_key or "").strip()
+        if IS_WINDOWS:
+            return command_key.lower()
+        return command_key
+
     def terminal_command_approval(self, command):
         if self.agent_terminal_permission == "full_access":
             return "allow"
         command_key = self.terminal_command_key(command)
-        if command_key and command_key in self.default_permissions and not self.command_has_shell_control(command):
+        permission_key = self.normalize_terminal_command_key(command_key)
+        if permission_key and permission_key in self.default_permissions and not self.command_has_shell_control(command):
             return "allow"
         return self.wait_for_terminal_permission(command, command_key)
 
@@ -239,7 +288,7 @@ class ChatCompletionWorker(QThread):
             decision = self.pending_permission_decision or "reject"
             self.pending_permission_decision = None
         if decision == "allow_always" and command_key:
-            self.default_permissions.add(command_key)
+            self.default_permissions.add(self.normalize_terminal_command_key(command_key))
             return "allow"
         if decision == "allow_once":
             return "allow"
@@ -334,54 +383,81 @@ class ChatCompletionWorker(QThread):
 
     def run_windows_terminal_command(self, command):
         process = None
+        output_queue = queue.Queue()
+        reader_threads = []
         try:
+            encoded_command = self.windows_powershell_encoded_command(command)
             process = subprocess.Popen(
                 [
                     "powershell.exe",
                     "-NoLogo",
                     "-NoProfile",
+                    "-NonInteractive",
                     "-ExecutionPolicy",
                     "Bypass",
-                    "-Command",
-                    command,
+                    "-EncodedCommand",
+                    encoded_command,
                 ],
                 cwd=str(self.terminal_cwd),
                 shell=False,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
                 creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0),
             )
-            try:
-                stdout, stderr = process.communicate(timeout=TERMINAL_TIMEOUT_SECONDS)
-            except subprocess.TimeoutExpired:
-                self.terminate_terminal_process(process, force=True)
-                stdout, stderr = process.communicate()
-                return {
-                    "exit_code": None,
-                    "timed_out": True,
-                    "stopped": False,
-                    "output": self.truncate_terminal_output(self.combine_terminal_streams(stdout, stderr).strip()),
-                }
+
+            for stream_name, stream in (("stdout", process.stdout), ("stderr", process.stderr)):
+                if stream is None:
+                    continue
+                thread = threading.Thread(
+                    target=self.read_windows_terminal_stream,
+                    args=(stream_name, stream, output_queue),
+                    daemon=True,
+                )
+                thread.start()
+                reader_threads.append(thread)
+
+            output_parts = []
+            deadline = time.monotonic() + TERMINAL_TIMEOUT_SECONDS
+            while process.poll() is None or any(thread.is_alive() for thread in reader_threads):
+                if self.stop_requested:
+                    self.terminate_terminal_process(process)
+                    self.drain_windows_terminal_output(output_queue, output_parts)
+                    self.terminal_log_received.emit("\n[stopped]\n")
+                    return {
+                        "exit_code": None,
+                        "timed_out": False,
+                        "stopped": True,
+                        "output": self.truncate_terminal_output("".join(output_parts).strip() or "Terminal command stopped."),
+                    }
+                if time.monotonic() >= deadline:
+                    self.terminate_terminal_process(process, force=True)
+                    self.drain_windows_terminal_output(output_queue, output_parts)
+                    return {
+                        "exit_code": None,
+                        "timed_out": True,
+                        "stopped": False,
+                        "output": self.truncate_terminal_output("".join(output_parts).strip()),
+                    }
+
+                try:
+                    stream_name, chunk = output_queue.get(timeout=0.1)
+                except queue.Empty:
+                    continue
+                self.append_windows_terminal_output(stream_name, chunk, output_parts)
+
+            self.drain_windows_terminal_output(output_queue, output_parts)
             if self.stop_requested:
                 return {
                     "exit_code": None,
                     "timed_out": False,
                     "stopped": True,
-                    "output": self.truncate_terminal_output(self.combine_terminal_streams(stdout, stderr).strip() or "Terminal command stopped."),
+                    "output": self.truncate_terminal_output("".join(output_parts).strip() or "Terminal command stopped."),
                 }
-            output = self.combine_terminal_streams(stdout, stderr).strip()
-            if stdout:
-                self.terminal_log_received.emit(stdout)
-            if stderr:
-                self.terminal_log_received.emit(f"[stderr] {stderr}")
             return {
                 "exit_code": process.returncode,
                 "timed_out": False,
                 "stopped": False,
-                "output": self.truncate_terminal_output(output),
+                "output": self.truncate_terminal_output("".join(output_parts).strip()),
             }
         except Exception as exc:
             if process is not None and process.poll() is None:
@@ -392,13 +468,49 @@ class ChatCompletionWorker(QThread):
                 "stopped": False,
                 "output": f"Unable to run terminal command: {exc}",
             }
+        finally:
+            for thread in reader_threads:
+                thread.join(timeout=0.2)
 
-    def combine_terminal_streams(self, stdout, stderr):
-        stdout = stdout or ""
-        stderr = stderr or ""
-        if stderr:
-            return f"{stdout}\n[stderr]\n{stderr}" if stdout else f"[stderr]\n{stderr}"
-        return stdout
+    def windows_powershell_encoded_command(self, command):
+        script = (
+            "$__acuEncoding = [System.Text.UTF8Encoding]::new($false)\n"
+            "[Console]::OutputEncoding = $__acuEncoding\n"
+            "[Console]::InputEncoding = $__acuEncoding\n"
+            "$OutputEncoding = $__acuEncoding\n"
+            f"{command}"
+        )
+        return base64.b64encode(script.encode("utf-16le")).decode("ascii")
+
+    def read_windows_terminal_stream(self, stream_name, stream, output_queue):
+        try:
+            while True:
+                chunk = os.read(stream.fileno(), 4096)
+                if not chunk:
+                    break
+                output_queue.put((stream_name, chunk))
+        except Exception:
+            pass
+        finally:
+            try:
+                stream.close()
+            except Exception:
+                pass
+
+    def append_windows_terminal_output(self, stream_name, chunk, output_parts):
+        text = chunk.decode("utf-8", errors="replace")
+        if stream_name == "stderr":
+            text = f"[stderr] {text}"
+        output_parts.append(text)
+        self.terminal_log_received.emit(text)
+
+    def drain_windows_terminal_output(self, output_queue, output_parts):
+        while True:
+            try:
+                stream_name, chunk = output_queue.get_nowait()
+            except queue.Empty:
+                break
+            self.append_windows_terminal_output(stream_name, chunk, output_parts)
 
     def terminate_terminal_process(self, process, force=False):
         if IS_WINDOWS:
