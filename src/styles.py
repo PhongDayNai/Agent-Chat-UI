@@ -544,8 +544,8 @@ code {
     font-family: "IBM Plex Mono", "Consolas", monospace;
 }
 a {
-    color: #f2f3f5;
-    text-decoration: none;
+    color: #57a6ff;
+    text-decoration: underline;
 }
 a:hover {
     color: #2f7ed8;
