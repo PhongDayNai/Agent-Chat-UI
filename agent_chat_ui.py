@@ -126,6 +126,24 @@ QPushButton#tinyButton {
     border-radius: 10px;
     font-size: 10pt;
 }
+QPushButton#messageIconButton {
+    min-width: 30px;
+    max-width: 30px;
+    min-height: 30px;
+    max-height: 30px;
+    padding: 0;
+    border-radius: 9px;
+    font-size: 12pt;
+    font-weight: 700;
+    background: #17191b;
+    border: 1px solid #2a2d30;
+    color: #cbd0d5;
+}
+QPushButton#messageIconButton:hover {
+    background: #202326;
+    border-color: #3a3f44;
+    color: #ffffff;
+}
 QPushButton#secondaryButton {
     background: #17191b;
     border-color: #2b2f33;
@@ -515,6 +533,8 @@ CONFIG_PATH = Path(__file__).with_name("config.json")
 PIN_ICON_PATH = Path(__file__).with_name("assets") / "ic_pin.svg"
 ARROW_UP_ICON_PATH = Path(__file__).with_name("assets") / "ic_arrow_up.svg"
 STOP_ICON_PATH = Path(__file__).with_name("assets") / "ic_stop.svg"
+COPY_ICON_PATH = Path(__file__).with_name("assets") / "ic_copy.svg"
+RETRY_ICON_PATH = Path(__file__).with_name("assets") / "ic_retry.svg"
 CLIPBOARD_IMAGE_DIR = Path(tempfile.gettempdir()) / "agent_chat_ui_clipboard"
 
 
@@ -1176,14 +1196,17 @@ class MessageCard(QFrame):
 
         self.copy_button = None
         self.retry_button = None
-        if role == "assistant":
-            self.copy_button = QPushButton("Copy")
-            self.copy_button.setObjectName("tinyButton")
+        if role in {"assistant", "user"}:
+            self.copy_button = SvgActionButton(COPY_ICON_PATH)
+            self.copy_button.setObjectName("messageIconButton")
+            self.copy_button.setToolTip("Copy")
             self.copy_button.clicked.connect(self.copy_text)
             header_layout.addWidget(self.copy_button)
 
-            self.retry_button = QPushButton("Retry")
-            self.retry_button.setObjectName("tinyButton")
+        if role == "assistant":
+            self.retry_button = SvgActionButton(RETRY_ICON_PATH)
+            self.retry_button.setObjectName("messageIconButton")
+            self.retry_button.setToolTip("Retry")
             self.retry_button.clicked.connect(self.emit_retry)
             header_layout.addWidget(self.retry_button)
 
