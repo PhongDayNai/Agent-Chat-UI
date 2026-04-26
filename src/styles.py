@@ -134,6 +134,42 @@ QLabel#sectionLabel {
     color: #8c9298;
     letter-spacing: 0.03em;
 }
+QFrame#panel QCheckBox {
+    spacing: 10px;
+    color: #e8eaed;
+    font-size: 10.5pt;
+    font-weight: 500;
+}
+QFrame#panel QCheckBox:hover {
+    color: #ffffff;
+}
+QFrame#panel QCheckBox::indicator {
+    width: 18px;
+    height: 18px;
+    border-radius: 6px;
+    border: 1px solid #3a3f44;
+    background: #101214;
+}
+QFrame#panel QCheckBox::indicator:hover {
+    border-color: #7d858d;
+    background: #171a1d;
+}
+QFrame#panel QCheckBox::indicator:checked {
+    border-color: #f2f3f5;
+    background: #202326;
+    image: url("__CHECK_ICON__");
+}
+QFrame#panel QCheckBox::indicator:checked:hover {
+    border-color: #ffffff;
+    background: #282c30;
+}
+QFrame#panel QCheckBox::indicator:disabled {
+    border-color: #24272a;
+    background: #141618;
+}
+QFrame#panel QCheckBox:disabled {
+    color: #5f6368;
+}
 QPushButton#fieldIconButton {
     min-width: 32px;
     max-width: 32px;
