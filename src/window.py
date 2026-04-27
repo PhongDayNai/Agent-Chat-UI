@@ -170,7 +170,6 @@ class AgentChatWindow(QMainWindow):
         self.sidebar_pinned = self.pin_panel
         self.sidebar_open = False
         self.sidebar_collapsed_width = 68
-        self.sidebar_scrollbar_allowance = 90
         self.sidebar_expanded_max_width = 320
         self.default_window_width = 1180
         self.default_window_height = 820
@@ -594,7 +593,7 @@ class AgentChatWindow(QMainWindow):
         self.sidebar_expanded_max_width = 380
 
     def target_sidebar_width(self):
-        return self.sidebar_expanded_max_width + self.sidebar_scrollbar_allowance
+        return self.sidebar_expanded_max_width
 
     def build_ui(self):
         central = QWidget()
@@ -747,7 +746,7 @@ class AgentChatWindow(QMainWindow):
         self.sidebar_content.setObjectName("sidebarScrollBody")
         self.sidebar_content.setMinimumWidth(0)
         content_layout = QVBoxLayout(self.sidebar_content)
-        content_layout.setContentsMargins(0, 0, 28, 0)
+        content_layout.setContentsMargins(0, 0, 12, 0)
         content_layout.setSpacing(16)
 
         title = QLabel("Agent Chat")
@@ -1972,8 +1971,14 @@ class AgentChatWindow(QMainWindow):
         self.apply_url_button.setEnabled(False)
 
         try:
+            health_url = self.build_server_url("/health")
             models_url = self.build_server_url("/v1/models")
             headers = self.auth_headers()
+            health_response = requests.get(health_url, headers=headers, timeout=2)
+            if health_response.status_code not in (200, 404):
+                self.set_disconnected_state(f"OpenAI-compatible server health returned HTTP {health_response.status_code}.")
+                return
+
             response = requests.get(models_url, headers=headers, timeout=2)
             if response.status_code != 200:
                 self.set_disconnected_state(f"OpenAI-compatible server returned HTTP {response.status_code}.")
