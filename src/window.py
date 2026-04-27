@@ -1972,14 +1972,8 @@ class AgentChatWindow(QMainWindow):
         self.apply_url_button.setEnabled(False)
 
         try:
-            health_url = self.build_server_url("/health")
             models_url = self.build_server_url("/v1/models")
             headers = self.auth_headers()
-            health_response = requests.get(health_url, headers=headers, timeout=2)
-            if health_response.status_code != 200:
-                self.set_disconnected_state(f"OpenAI-compatible server health returned HTTP {health_response.status_code}.")
-                return
-
             response = requests.get(models_url, headers=headers, timeout=2)
             if response.status_code != 200:
                 self.set_disconnected_state(f"OpenAI-compatible server returned HTTP {response.status_code}.")
