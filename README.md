@@ -13,8 +13,11 @@ servers such as `llama-server` keep working without an API key. For hosted or
 private endpoints, add a named API key from the sidebar, select it, then apply
 it before refreshing models or sending messages.
 
-Release v1.0 is available here:
-https://github.com/PhongDayNai/Agent-Chat-UI/releases/tag/v1.0
+Release v1.1 is available here:
+https://github.com/PhongDayNai/Agent-Chat-UI/releases/tag/v1.1
+
+If Agent Chat UI is useful for your workflow, please consider giving the
+repository a star.
 
 ## Why this exists
 
@@ -108,17 +111,16 @@ http://localhost:8080
 
 ## Download
 
-Prebuilt v1.0 packages are available from the GitHub release page. v1.1 source
-is in this branch; publish v1.1 packages when cutting the release:
+Prebuilt v1.1 packages are available from the GitHub release page:
 
-https://github.com/PhongDayNai/Agent-Chat-UI/releases/tag/v1.0
+https://github.com/PhongDayNai/Agent-Chat-UI/releases/tag/v1.1
 
 Available artifacts:
 
-- Windows: `agent-chat-ui-1.0-windows-x86_64.exe`
-- Linux AppImage: `agent-chat-ui-1.0-x86_64.AppImage`
-- Linux Debian package: `agent-chat-ui_1.0_amd64.deb`
-- Linux tarball: `agent-chat-ui-1.0-linux-x86_64.tar.gz`
+- Windows: `agent-chat-ui-1.1-windows-x86_64.exe`
+- Linux AppImage: `agent-chat-ui-1.1-x86_64.AppImage`
+- Linux Debian package: `agent-chat-ui_1.1_amd64.deb`
+- Linux tarball: `agent-chat-ui-1.1-linux-x86_64.tar.gz`
 
 ## Setup
 
