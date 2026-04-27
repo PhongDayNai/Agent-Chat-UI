@@ -8,7 +8,9 @@ __pycache__/
 agent_chat_ui_clipboard/
 /build/
 /dist/
+/docs/
 /packaging/
+/scripts/
 *.spec
 *.deb
 *.AppImage
