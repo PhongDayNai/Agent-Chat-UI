@@ -94,9 +94,11 @@ lightweight while still exposing the tools that make desktop chat useful:
 
 The server is expected to expose:
 
-- `GET /health`
 - `GET /v1/models`
 - `POST /v1/chat/completions`
+
+`GET /health` is optional. If it returns `404`, the app falls back to
+`/v1/models` to verify the server.
 
 The default base URL is:
 
@@ -135,10 +137,10 @@ Start your OpenAI-compatible server first, then run:
 python agent_chat_ui.py
 ```
 
-The app will check `/health`, load models from `/v1/models`, and enable sending
-once a model is available. If your endpoint requires authentication, open the
-sidebar, save an API key with a name, select that name, apply it, then refresh
-models.
+The app checks `/health` when available, falls back to `/v1/models` when
+`/health` returns `404`, and enables sending once a model is available. If your
+endpoint requires authentication, open the sidebar, save an API key with a name,
+select that name, apply it, then refresh models.
 
 ## Terminal Agent Usage
 
