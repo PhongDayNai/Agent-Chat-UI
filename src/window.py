@@ -14,6 +14,7 @@ from PyQt6.QtGui import QDesktopServices, QFontMetrics, QGuiApplication, QIcon, 
 from PyQt6.QtSvg import QSvgRenderer
 from PyQt6.QtWidgets import (
     QApplication,
+    QBoxLayout,
     QCheckBox,
     QComboBox,
     QDoubleSpinBox,
@@ -92,6 +93,11 @@ TERMINAL_PERMISSION_COLORS = {
 }
 SIDEBAR_DROPDOWN_TEXT_INSET = "  "
 SIDEBAR_ELIDE_WIDTH = 320
+COMPACT_LAYOUT_WIDTH = 900
+COMPACT_LAYOUT_HEIGHT = 760
+COMPACT_SIDEBAR_WIDTH = 340
+COMPACT_SIDEBAR_MIN_WIDTH = 300
+COMPACT_WINDOW_GUTTER = 80
 
 class AgentChatWindow(QMainWindow):
     def __init__(self):
@@ -171,6 +177,7 @@ class AgentChatWindow(QMainWindow):
         self.sidebar_open = False
         self.sidebar_collapsed_width = 68
         self.sidebar_expanded_max_width = 320
+        self.compact_layout_active = False
         self.default_window_width = 1180
         self.default_window_height = 820
         self.sticky_code_header = None
@@ -592,8 +599,34 @@ class AgentChatWindow(QMainWindow):
         self.default_window_height = max(420, min(820, available.height() - 40))
         self.sidebar_expanded_max_width = 380
 
+    def is_compact_layout(self):
+        return self.width() < COMPACT_LAYOUT_WIDTH or self.height() < COMPACT_LAYOUT_HEIGHT
+
     def target_sidebar_width(self):
+        if self.is_compact_layout():
+            available_width = max(COMPACT_SIDEBAR_MIN_WIDTH, self.width() - COMPACT_WINDOW_GUTTER)
+            return min(COMPACT_SIDEBAR_WIDTH, available_width)
         return self.sidebar_expanded_max_width
+
+    def apply_responsive_layout(self):
+        compact = self.is_compact_layout()
+        if compact == self.compact_layout_active:
+            return
+        self.compact_layout_active = compact
+        if hasattr(self, "sidebar_actions_layout"):
+            direction = (
+                QBoxLayout.Direction.TopToBottom
+                if compact
+                else QBoxLayout.Direction.LeftToRight
+            )
+            self.sidebar_actions_layout.setDirection(direction)
+            self.sidebar_actions_layout.setSpacing(8 if compact else 10)
+        if hasattr(self, "advanced_panel"):
+            margins = (12, 14, 12, 14) if compact else (16, 18, 16, 18)
+            self.advanced_panel.layout().setContentsMargins(*margins)
+        if hasattr(self, "sidebar_content"):
+            self.sidebar_content.layout().setSpacing(12 if compact else 16)
+        self.update_model_selector_text()
 
     def build_ui(self):
         central = QWidget()
@@ -660,6 +693,7 @@ class AgentChatWindow(QMainWindow):
         self.refresh_terminal_permission_ui()
         self.update_empty_state()
         self.update_send_availability()
+        self.apply_responsive_layout()
         if self.sidebar_pinned:
             QTimer.singleShot(0, self.expand_sidebar)
 
@@ -775,21 +809,21 @@ class AgentChatWindow(QMainWindow):
         self.model_selector.setMenu(self.model_menu)
         content_layout.addWidget(self.model_selector)
 
-        buttons_row = QHBoxLayout()
-        buttons_row.setSpacing(10)
+        self.sidebar_actions_layout = QBoxLayout(QBoxLayout.Direction.LeftToRight)
+        self.sidebar_actions_layout.setSpacing(10)
 
         self.refresh_button = QPushButton("Refresh")
         self.refresh_button.setObjectName("ghostButton")
         self.refresh_button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.refresh_button.clicked.connect(self.refresh_server_state)
-        buttons_row.addWidget(self.refresh_button)
+        self.sidebar_actions_layout.addWidget(self.refresh_button)
 
         self.clear_button = QPushButton("New session")
         self.clear_button.setObjectName("ghostButton")
         self.clear_button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.clear_button.clicked.connect(self.clear_chat)
-        buttons_row.addWidget(self.clear_button)
-        content_layout.addLayout(buttons_row)
+        self.sidebar_actions_layout.addWidget(self.clear_button)
+        content_layout.addLayout(self.sidebar_actions_layout)
 
         self.advanced_panel = self.build_advanced_panel()
         content_layout.addWidget(self.advanced_panel)
@@ -1958,8 +1992,10 @@ class AgentChatWindow(QMainWindow):
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
+        self.apply_responsive_layout()
         if self.sidebar_open:
             self.sync_sidebar_width(self.target_sidebar_width())
+        self.update_model_selector_text()
         self.update_sticky_code_header()
         self.position_toast()
 
@@ -2027,13 +2063,29 @@ class AgentChatWindow(QMainWindow):
 
     def set_selected_model_name(self, model_name):
         self.selected_model_name = model_name.strip()
+        self.update_model_selector_text()
+        self.update_send_availability()
+
+    def update_model_selector_text(self):
+        if not hasattr(self, "model_selector"):
+            return
         if self.selected_model_name:
-            self.model_selector.setText(f"{SIDEBAR_DROPDOWN_TEXT_INSET}{self.selected_model_name}")
+            metrics = QFontMetrics(self.model_selector.font())
+            sidebar_button_width = self.target_sidebar_width() - 48
+            actual_button_width = self.model_selector.width()
+            if actual_button_width > 0:
+                sidebar_button_width = min(sidebar_button_width, actual_button_width)
+            available_width = sidebar_button_width - 54
+            display_name = metrics.elidedText(
+                self.selected_model_name,
+                Qt.TextElideMode.ElideRight,
+                max(80, available_width),
+            )
+            self.model_selector.setText(f"{SIDEBAR_DROPDOWN_TEXT_INSET}{display_name}")
             self.model_selector.setToolTip(self.selected_model_name)
         else:
             self.model_selector.setText(f"{SIDEBAR_DROPDOWN_TEXT_INSET}Select model")
             self.model_selector.setToolTip("Select model")
-        self.update_send_availability()
 
     def refresh_model_menu(self):
         if not hasattr(self, "model_menu"):
