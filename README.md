@@ -1,20 +1,20 @@
 # Agent Chat UI
 
-Version: 1.1
+Version: 1.2
 
 Agent Chat UI is a PyQt6 desktop chat client for OpenAI-compatible chat
-completion APIs. The v1.1 release is a normal desktop chat app: choose a server
+completion APIs. The v1.2 release is a normal desktop chat app: choose a server
 URL, load models from the API, send messages, attach context, and stream
-responses in the UI. v1.1 adds named API key support for authenticated
-OpenAI-compatible endpoints.
+responses in the UI. v1.2 stores named API key secrets in the operating
+system keychain when available.
 
 The default target is still `http://localhost:8080`, so unauthenticated local
 servers such as `llama-server` keep working without an API key. For hosted or
 private endpoints, add a named API key from the sidebar, select it, then apply
 it before refreshing models or sending messages.
 
-Release v1.1 is available here:
-https://github.com/PhongDayNai/Agent-Chat-UI/releases/tag/v1.1
+Releases are available here:
+https://github.com/PhongDayNai/Agent-Chat-UI/releases
 
 If Agent Chat UI is useful for your workflow, please consider giving the
 repository a star.
@@ -38,13 +38,14 @@ lightweight while still exposing the tools that make desktop chat useful:
 ## Features
 
 - **OpenAI-compatible API support**  
-  Connects to OpenAI-compatible chat completion servers. v1.1 can call public
+  Connects to OpenAI-compatible chat completion servers. v1.2 can call public
   endpoints directly or send a bearer token when a named API key is applied.
 
 - **Named API keys**  
   Save API keys with required display names from the sidebar. The key menu only
   shows saved names, and requests include `Authorization: Bearer <key>` only
-  after the selected key has been applied.
+  after the selected key has been applied. New key secrets are stored in the
+  OS keychain by default; the user config keeps only key metadata.
 
 - **Localhost-first defaults**  
   Uses `http://localhost:8080` by default, which matches common local servers
@@ -94,6 +95,10 @@ lightweight while still exposing the tools that make desktop chat useful:
 - `pip`
 - `venv`
 - An OpenAI-compatible chat completion server, with or without API key auth
+- OS keychain support for saving API keys:
+  - Windows: Windows Credential Manager through `keyring`
+  - Linux desktop: Secret Service/GNOME Keyring or KWallet, depending on the
+    desktop session and distro packages
 
 The server is expected to expose:
 
@@ -111,16 +116,16 @@ http://localhost:8080
 
 ## Download
 
-Prebuilt v1.1 packages are available from the GitHub release page:
+Prebuilt packages are available from the GitHub release page:
 
-https://github.com/PhongDayNai/Agent-Chat-UI/releases/tag/v1.1
+https://github.com/PhongDayNai/Agent-Chat-UI/releases
 
 Available artifacts:
 
-- Windows: `agent-chat-ui-1.1-windows-x86_64.exe`
-- Linux AppImage: `agent-chat-ui-1.1-x86_64.AppImage`
-- Linux Debian package: `agent-chat-ui_1.1_amd64.deb`
-- Linux tarball: `agent-chat-ui-1.1-linux-x86_64.tar.gz`
+- Windows installer or executable
+- Linux AppImage
+- Linux Debian package
+- Linux tarball
 
 ## Setup
 
@@ -192,7 +197,7 @@ custom packaging.
 Important sections:
 
 - `server`: base URL and saved server URL history
-- `api_keys`: saved API key names, values, and selected key ID
+- `api_keys`: saved API key names, storage metadata, and selected key ID
 - `session_prompt`: current prompt and prompt history
 - `agent_terminal`: terminal enabled state, permission mode, and default command
   allowlist
@@ -202,8 +207,28 @@ Important sections:
 - `ui`: panel pinning, composer sizing, and display preferences
 
 Most settings can be changed from the app UI and are saved automatically. API
-keys are stored in the local user config JSON for convenience; this is not a
-secure OS keychain or vault.
+key secrets are stored in the OS keychain through `keyring` when available:
+Windows uses Windows Credential Manager, macOS uses Keychain, and Linux uses a
+Secret Service or KWallet compatible backend. On Linux, some desktop or
+minimal/headless environments may need packages such as `gnome-keyring`,
+`libsecret`, KWallet, and a working DBus session. Package names vary by distro.
+
+If no keychain backend is available, the app still starts and `No API key`
+continues to work for unauthenticated local servers. Saving a new API key fails
+clearly instead of writing a plaintext secret to config by default. Legacy v1.1
+configs that already contain plaintext API keys are loaded in degraded
+compatibility mode and the UI warns that those keys remain in local config.
+
+To verify API keys are really stored in the OS keychain on Linux or Windows,
+run this after saving a key in the app:
+
+```bash
+python tests/check_keyring_api_keys.py
+```
+
+The script checks the current user config, confirms it has no plaintext API key
+values, and verifies each `storage: "keyring"` item has a readable keychain
+secret without printing the secret.
 
 ## File Context
 
@@ -221,11 +246,13 @@ agent_chat_ui.py      # launcher
 src/main.py           # Qt application entrypoint
 src/window.py         # main window, UI state, config, message flow
 src/worker.py         # streaming chat worker and terminal execution
+src/key_storage.py    # OS keychain wrapper for API key secrets
 src/widgets.py        # custom widgets for chat cards, previews, terminal logs
 src/styles.py         # Qt stylesheet
 src/constants.py      # paths, limits, prompt snippets, regexes
 src/markdown_utils.py # markdown and terminal tag normalization
 src/html_utils.py     # URL HTML-to-text extraction
+tests/                # manual verification scripts
 assets/               # SVG icons
 config.json           # optional legacy local configuration
 ```
@@ -239,5 +266,6 @@ config.json           # optional legacy local configuration
 - Keep session prompts short when using small context models.
 - Terminal output and fetched URL content are truncated by design to avoid
   overwhelming the model context.
-- User config is local state; review legacy `config.json` before sharing the
+- User config is local state. It should only contain API key metadata after a
+  successful v1.2 migration, but review legacy `config.json` before sharing the
   repository.
