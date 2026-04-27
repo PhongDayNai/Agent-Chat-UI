@@ -8,9 +8,11 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 RESOURCE_ROOT = Path(getattr(sys, "_MEIPASS", PROJECT_ROOT))
-APP_VERSION = "1.1"
+APP_VERSION = "1.2"
 APP_WORKSPACE = Path.home()
 IS_WINDOWS = sys.platform == "win32"
+KEYRING_SERVICE_NAME = "AgentChatUI"
+API_KEY_KEYRING_PREFIX = "api-key:"
 
 
 def resource_path(relative_path):

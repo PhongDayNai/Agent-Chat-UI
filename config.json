@@ -14,6 +14,7 @@
   "api_keys": {
     "enabled": true,
     "selected_id": "",
+    "allow_plaintext_fallback": false,
     "items": []
   },
   "agent_terminal": {

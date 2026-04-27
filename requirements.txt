@@ -1,5 +1,6 @@
 PyQt6>=6.7,<7
 requests>=2.31,<3
+keyring>=25.0
 pypdf>=4,<6
 markdown-it-py[linkify]>=3,<4
 mdit-py-plugins>=0.4,<0.5

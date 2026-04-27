@@ -77,6 +77,7 @@ from widgets import (
     SvgActionButton,
 )
 from constants import ARROW_UP_ICON_PATH, STOP_ICON_PATH
+import key_storage
 from worker import ChatCompletionWorker
 
 TERMINAL_PERMISSION_DEFAULT = "default"
@@ -114,6 +115,8 @@ class AgentChatWindow(QMainWindow):
         self.message_queue = []
         self.available_models = []
         self.base_url = DEFAULT_SERVER_BASE_URL
+        self.config_needs_save = False
+        self.api_key_storage_warnings = []
         self.config = self.load_config()
         server_config = self.config.get("server", {})
         session_prompt_config = self.config.get("session_prompt", {})
@@ -194,6 +197,10 @@ class AgentChatWindow(QMainWindow):
 
         self.build_ui()
         QApplication.instance().focusChanged.connect(self.on_focus_changed)
+        if self.config_needs_save:
+            QTimer.singleShot(0, self.save_config)
+        if self.api_key_storage_warnings:
+            QTimer.singleShot(0, self.show_api_key_storage_warning)
         QTimer.singleShot(0, self.prompt_for_workspace_if_needed)
         QTimer.singleShot(0, self.refresh_server_state)
 
@@ -212,6 +219,7 @@ class AgentChatWindow(QMainWindow):
             "api_keys": {
                 "enabled": True,
                 "selected_id": "",
+                "allow_plaintext_fallback": False,
                 "items": [],
             },
             "agent_terminal": {
@@ -267,6 +275,7 @@ class AgentChatWindow(QMainWindow):
             "api_keys": {
                 "enabled": self.api_keys_enabled,
                 "selected_id": self.selected_api_key_id,
+                "allow_plaintext_fallback": False,
                 "items": self.api_keys,
             },
             "agent_terminal": {
@@ -383,28 +392,79 @@ class AgentChatWindow(QMainWindow):
 
     def normalize_api_keys_config(self, payload, default_config):
         items = []
+        changed = False
         raw_items = payload.get("items", default_config.get("items", []))
         if isinstance(raw_items, list):
             for raw_item in raw_items:
                 if not isinstance(raw_item, dict):
+                    changed = True
                     continue
-                name = str(raw_item.get("name", "")).strip()
-                value = str(raw_item.get("value", "")).strip()
-                if not name or not value:
+                raw_item = dict(raw_item)
+                raw_key_id = str(raw_item.get("id", "")).strip()
+                if raw_key_id and any(item["id"] == raw_key_id for item in items):
+                    if str(raw_item.get("storage", "")).strip().lower() == "keyring" and not str(raw_item.get("value", "")).strip():
+                        self.api_key_storage_warnings.append(
+                            f"Skipped duplicate keychain id for API key '{raw_item.get('name', 'Unnamed')}'. Re-enter the key."
+                        )
+                        changed = True
+                        continue
+                    raw_item["id"] = uuid.uuid4().hex
+                    changed = True
+                normalized_item, item_changed = self.normalize_api_key_item(raw_item)
+                changed = changed or item_changed
+                if not normalized_item:
                     continue
-                key_id = str(raw_item.get("id", "")).strip() or uuid.uuid4().hex
+                key_id = normalized_item["id"]
                 if any(item["id"] == key_id for item in items):
-                    key_id = uuid.uuid4().hex
-                items.append({"id": key_id, "name": name, "value": value})
+                    normalized_item["id"] = uuid.uuid4().hex
+                    if normalized_item.get("storage") == "keyring":
+                        self.api_key_storage_warnings.append(
+                            f"Skipped duplicate keychain id for API key '{normalized_item.get('name', 'Unnamed')}'. Re-enter the key."
+                        )
+                        continue
+                    changed = True
+                items.append(normalized_item)
 
         selected_id = str(payload.get("selected_id", default_config.get("selected_id", ""))).strip()
         if selected_id and not any(item["id"] == selected_id for item in items):
             selected_id = ""
+            changed = True
+        if "allow_plaintext_fallback" not in payload:
+            changed = True
+        self.config_needs_save = self.config_needs_save or changed
         return {
             "enabled": bool(payload.get("enabled", default_config.get("enabled", True))),
             "selected_id": selected_id,
+            "allow_plaintext_fallback": False,
             "items": items,
         }
+
+    def normalize_api_key_item(self, raw_item):
+        name = str(raw_item.get("name", "")).strip()
+        if not name:
+            return None, True
+        key_id = str(raw_item.get("id", "")).strip() or uuid.uuid4().hex
+        storage = str(raw_item.get("storage", "")).strip().lower()
+        value = str(raw_item.get("value", "")).strip()
+        changed = raw_item.get("id") != key_id or raw_item.get("name") != name
+
+        if value:
+            try:
+                key_storage.set_api_key_secret(key_id, value)
+            except key_storage.KeyStorageError as exc:
+                self.api_key_storage_warnings.append(
+                    f"Keychain unavailable; API key '{name}' remains in local config."
+                )
+                return {"id": key_id, "name": name, "storage": "plaintext", "value": value}, True
+            return {"id": key_id, "name": name, "storage": "keyring"}, True
+
+        if storage == "keyring":
+            return {"id": key_id, "name": name, "storage": "keyring"}, changed
+
+        if storage == "plaintext":
+            return None, True
+
+        return None, True
 
     def normalize_composer_max_lines(self, value):
         try:
@@ -2159,6 +2219,12 @@ class AgentChatWindow(QMainWindow):
         item = self.current_api_key_item()
         if not item:
             return ""
+        if item.get("storage") == "keyring":
+            try:
+                return key_storage.get_api_key_secret(item.get("id", "")).strip()
+            except key_storage.KeyStorageError as exc:
+                self.api_key_storage_warnings.append(str(exc))
+                return ""
         return str(item.get("value", "")).strip()
 
     def auth_headers(self):
@@ -2181,7 +2247,7 @@ class AgentChatWindow(QMainWindow):
             selected_text = "No API key"
             history_tooltip = "Selection: No API key"
         applied = self.pending_api_key_id == self.selected_api_key_id
-        detail = "Applied to requests." if applied else "Press ✓ to apply this selection to requests."
+        detail = self.api_key_detail_text(pending_item, applied)
         if hasattr(self, "api_key_active_badge"):
             self.set_elided_label_text(self.api_key_active_badge, selected_text)
         if hasattr(self, "api_key_detail"):
@@ -2200,6 +2266,26 @@ class AgentChatWindow(QMainWindow):
             self.new_api_key_button.setText("Hide new key" if self.new_api_key_panel_expanded else "New key")
         if hasattr(self, "api_keys_section"):
             self.api_keys_section.setVisible(self.api_keys_enabled)
+
+    def api_key_detail_text(self, item, applied):
+        action_text = "Applied to requests." if applied else "Press ✓ to apply this selection to requests."
+        if not item:
+            return action_text
+        if item.get("storage") == "keyring":
+            try:
+                secret = key_storage.get_api_key_secret(item.get("id", ""))
+            except key_storage.KeyStorageError:
+                return "OS keychain unavailable. Re-enable keychain or re-enter the API key."
+            if not secret:
+                return "Secret not found in keychain. Re-enter the API key."
+            return f"Stored in OS keychain. {action_text}"
+        return f"Stored in local config plaintext. {action_text}"
+
+    def show_api_key_storage_warning(self):
+        if not self.api_key_storage_warnings:
+            return
+        warning = self.api_key_storage_warnings[-1]
+        self.set_status_message(warning)
 
     def show_api_key_menu(self):
         if not self.api_keys:
@@ -2274,11 +2360,22 @@ class AgentChatWindow(QMainWindow):
             return
 
         existing_item = next((item for item in self.api_keys if item.get("name") == name), None)
+        key_id = existing_item.get("id", "") if existing_item else uuid.uuid4().hex
+        try:
+            key_storage.set_api_key_secret(key_id, value)
+        except key_storage.KeyStorageError as exc:
+            message = f"Could not save API key to OS keychain: {exc}"
+            self.set_status_message(message)
+            if hasattr(self, "api_key_detail"):
+                self.api_key_detail.setText(message)
+            return
+
         if existing_item:
-            existing_item["value"] = value
+            existing_item["storage"] = "keyring"
+            existing_item.pop("value", None)
             self.pending_api_key_id = existing_item["id"]
         else:
-            item = {"id": uuid.uuid4().hex, "name": name, "value": value}
+            item = {"id": key_id, "name": name, "storage": "keyring"}
             self.api_keys.insert(0, item)
             self.pending_api_key_id = item["id"]
 
@@ -2296,14 +2393,22 @@ class AgentChatWindow(QMainWindow):
         key_id = str(key_id or "").strip()
         if not key_id:
             return
+        deleted_item = next((item for item in self.api_keys if item.get("id") == key_id), None)
         was_selected = self.selected_api_key_id == key_id
         self.api_keys = [item for item in self.api_keys if item.get("id") != key_id]
+        if deleted_item and deleted_item.get("storage") == "keyring":
+            try:
+                key_storage.delete_api_key_secret(key_id)
+            except key_storage.KeyStorageError as exc:
+                self.api_key_storage_warnings.append(str(exc))
         if was_selected:
             self.selected_api_key_id = ""
         if self.pending_api_key_id == key_id:
             self.pending_api_key_id = self.selected_api_key_id
         self.refresh_api_key_ui()
         self.save_config()
+        if self.api_key_storage_warnings:
+            self.show_api_key_storage_warning()
         if was_selected:
             self.refresh_server_state()
 
