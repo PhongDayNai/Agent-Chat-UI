@@ -9,18 +9,20 @@ from io import BytesIO
 from pathlib import Path
 
 import requests
-from PyQt6.QtCore import QByteArray, QBuffer, QEasingCurve, QEvent, QIODevice, QPoint, QPropertyAnimation, QRectF, QSize, QTimer, QUrl, Qt
-from PyQt6.QtGui import QDesktopServices, QFontMetrics, QGuiApplication, QIcon, QImage, QPainter, QPixmap
+from PyQt6.QtCore import QByteArray, QBuffer, QEasingCurve, QEvent, QIODevice, QPoint, QPropertyAnimation, QRectF, QSize, QTimer, QUrl, Qt, pyqtSignal
+from PyQt6.QtGui import QDesktopServices, QFontMetrics, QGuiApplication, QIcon, QImage, QPainter, QPainterPath, QPixmap, QRegion
 from PyQt6.QtSvg import QSvgRenderer
 from PyQt6.QtWidgets import (
     QApplication,
     QBoxLayout,
+    QButtonGroup,
     QCheckBox,
     QComboBox,
     QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -63,6 +65,18 @@ from constants import (
 )
 from html_utils import HtmlTextExtractor
 from markdown_utils import normalize_terminal_fences, replace_terminal_command_tags
+from characters import (
+    DEFAULT_CHARACTER_PROFILES,
+    get_active_character,
+    get_effective_character_capabilities,
+    normalize_character,
+    normalize_character_profiles,
+    set_character_capability,
+    set_character_favorite,
+    sort_characters,
+)
+from message_builder import build_messages
+from modes import MODE_AGENT, MODE_CHARACTER, MODE_CHAT, MODE_LABELS, normalize_mode
 from styles import APP_STYLE
 from widgets import (
     AttachmentChip,
@@ -99,6 +113,172 @@ COMPACT_LAYOUT_HEIGHT = 760
 COMPACT_SIDEBAR_WIDTH = 340
 COMPACT_SIDEBAR_MIN_WIDTH = 300
 COMPACT_WINDOW_GUTTER = 80
+CHARACTER_CARD_RATIOS = ("2:3", "3:2", "1:1", "9:16", "16:9")
+DEFAULT_CHARACTER_CARD_RATIO = "3:2"
+CHARACTER_CARD_MIN_WIDTH = 190
+CHARACTER_CARD_MAX_WIDTH = 260
+CHARACTER_CARD_MIN_HEIGHT = 150
+CHARACTER_CARD_MAX_HEIGHT = 340
+CHARACTER_CARD_RADIUS = 16
+
+
+class CharacterChoiceCard(QFrame):
+    selected = pyqtSignal(str)
+
+    def __init__(self, character, pixmap=None, card_ratio=DEFAULT_CHARACTER_CARD_RATIO, parent=None):
+        super().__init__(parent)
+        self.character = character
+        self.cover_pixmap = pixmap if pixmap and not pixmap.isNull() else QPixmap()
+        self.card_height = 214
+        self.card_ratio = self.normalize_card_ratio(card_ratio)
+        self.collapsed_panel_height = 84
+        self.expanded_panel_height = 132
+        self.current_panel_height = self.collapsed_panel_height
+        self.expanded = False
+        self.panel_animation = None
+        self.setObjectName("characterChoiceCard")
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setMinimumWidth(CHARACTER_CARD_MIN_WIDTH)
+        self.setMaximumWidth(CHARACTER_CARD_MAX_WIDTH)
+        self.setFixedHeight(self.card_height)
+
+        self.cover_label = QLabel("", self)
+        self.cover_label.setObjectName("characterChoiceCover")
+        self.cover_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        if self.cover_pixmap.isNull():
+            initials = "".join(part[:1] for part in character.get("name", "").split()[:2]).upper()
+            self.cover_label.setText(initials or "AI")
+
+        self.info_panel = QFrame(self)
+        self.info_panel.setObjectName("characterChoiceInfo")
+        info_layout = QVBoxLayout(self.info_panel)
+        info_layout.setContentsMargins(14, 14, 14, 12)
+        info_layout.setSpacing(5)
+        info_layout.addStretch(1)
+
+        self.name_label = QLabel(character.get("name", "Character"))
+        self.name_label.setObjectName("characterChoiceName")
+        self.name_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        info_layout.addWidget(self.name_label)
+
+        meta_parts = []
+        if character.get("style"):
+            meta_parts.append(character.get("style", "").title())
+        meta_parts.extend(character.get("tags", [])[:3])
+        self.meta_label = QLabel(" · ".join(meta_parts))
+        self.meta_label.setObjectName("characterChoiceMeta")
+        self.meta_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.meta_label.setVisible(bool(meta_parts))
+        info_layout.addWidget(self.meta_label)
+
+        self.description_label = QLabel(character.get("description", ""))
+        self.description_label.setObjectName("characterChoiceDescription")
+        self.description_label.setWordWrap(True)
+        self.description_label.hide()
+        info_layout.addWidget(self.description_label)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.update_card_height()
+        self.apply_rounded_mask()
+        self.position_content()
+
+    def normalize_card_ratio(self, value):
+        ratio = str(value or DEFAULT_CHARACTER_CARD_RATIO).strip()
+        return ratio if ratio in CHARACTER_CARD_RATIOS else DEFAULT_CHARACTER_CARD_RATIO
+
+    def set_card_ratio(self, value):
+        self.card_ratio = self.normalize_card_ratio(value)
+        self.update_card_height()
+        self.apply_rounded_mask()
+        self.position_content()
+
+    def update_card_height(self):
+        width = max(0, self.width())
+        if width <= 0:
+            return
+        ratio_width, ratio_height = (int(part) for part in self.card_ratio.split(":"))
+        target_height = round(width * ratio_height / ratio_width)
+        target_height = max(CHARACTER_CARD_MIN_HEIGHT, min(CHARACTER_CARD_MAX_HEIGHT, target_height))
+        if target_height != self.card_height:
+            self.card_height = target_height
+            self.setFixedHeight(self.card_height)
+            self.apply_rounded_mask()
+
+    def apply_rounded_mask(self):
+        width = self.width()
+        height = self.height()
+        if width <= 0 or height <= 0:
+            return
+        path = QPainterPath()
+        path.addRoundedRect(
+            QRectF(0, 0, width - 1, height - 1),
+            CHARACTER_CARD_RADIUS,
+            CHARACTER_CARD_RADIUS,
+        )
+        self.setMask(QRegion(path.toFillPolygon().toPolygon()))
+
+    def position_content(self):
+        width = max(0, self.width())
+        height = max(0, self.height())
+        if width <= 0 or height <= 0:
+            return
+        self.cover_label.setGeometry(0, 0, width, height)
+        if not self.cover_pixmap.isNull():
+            self.cover_label.setPixmap(
+                self.cover_pixmap.scaled(
+                    QSize(width, height),
+                    Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+            )
+        panel_height = int(self.current_panel_height)
+        self.info_panel.setGeometry(0, height - panel_height, width, panel_height)
+        self.cover_label.lower()
+        self.info_panel.raise_()
+
+    def animate_panel(self, target_height):
+        if self.panel_animation is not None:
+            self.panel_animation.stop()
+        self.panel_animation = QPropertyAnimation(self.info_panel, b"minimumHeight", self)
+        self.panel_animation.setDuration(220)
+        self.panel_animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self.panel_animation.setStartValue(int(self.current_panel_height))
+        self.panel_animation.setEndValue(target_height)
+        self.panel_animation.valueChanged.connect(self.update_panel_height)
+        self.panel_animation.finished.connect(lambda: self.update_panel_height(target_height))
+        self.panel_animation.start()
+
+    def update_panel_height(self, value):
+        self.current_panel_height = int(value)
+        self.position_content()
+
+    def enterEvent(self, event):
+        self.expanded = True
+        self.setProperty("expanded", True)
+        self.description_label.show()
+        self.animate_panel(self.expanded_panel_height)
+        self.position_content()
+        self.style().unpolish(self)
+        self.style().polish(self)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self.expanded = False
+        self.setProperty("expanded", False)
+        self.description_label.hide()
+        self.animate_panel(self.collapsed_panel_height)
+        self.position_content()
+        self.style().unpolish(self)
+        self.style().polish(self)
+        super().leaveEvent(event)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.selected.emit(self.character.get("id", ""))
+        super().mousePressEvent(event)
+
 
 class AgentChatWindow(QMainWindow):
     def __init__(self):
@@ -118,14 +298,19 @@ class AgentChatWindow(QMainWindow):
         self.config_needs_save = False
         self.api_key_storage_warnings = []
         self.config = self.load_config()
+        self.active_mode = normalize_mode(self.config.get("active_mode", MODE_CHAT))
         server_config = self.config.get("server", {})
         session_prompt_config = self.config.get("session_prompt", {})
         terminal_config = self.config.get("agent_terminal", {})
+        character_profiles_config = self.config.get("character_profiles", {})
         rendering_config = self.config.get("assistant_rendering", {})
         sampling_config = self.config.get("sampling", {})
         ui_config = self.config.get("ui", {})
         workspace_config = self.config.get("workspace", {})
         api_keys_config = self.config.get("api_keys", {})
+        self.character_card_ratio = self.normalize_character_card_ratio(
+            ui_config.get("character_card_ratio", DEFAULT_CHARACTER_CARD_RATIO)
+        )
 
         self.server_enabled = bool(server_config.get("enabled", True))
         configured_base_url = self.normalize_base_url(server_config.get("base_url", ""))
@@ -140,6 +325,7 @@ class AgentChatWindow(QMainWindow):
         self.api_keys = list(api_keys_config.get("items", []))
         self.selected_api_key_id = str(api_keys_config.get("selected_id", "")).strip()
         self.pending_api_key_id = self.selected_api_key_id
+        self.character_profiles = normalize_character_profiles(character_profiles_config)
         self.session_prompt_enabled = bool(session_prompt_config.get("enabled", True))
         self.session_prompt_history = self.clean_history(session_prompt_config.get("history", []))
         self.initial_session_prompt = str(session_prompt_config.get("value", "")).strip()
@@ -211,6 +397,7 @@ class AgentChatWindow(QMainWindow):
                 "base_url": DEFAULT_SERVER_BASE_URL,
                 "base_urls": [DEFAULT_SERVER_BASE_URL],
             },
+            "active_mode": MODE_CHAT,
             "session_prompt": {
                 "enabled": True,
                 "value": "",
@@ -222,6 +409,7 @@ class AgentChatWindow(QMainWindow):
                 "allow_plaintext_fallback": False,
                 "items": [],
             },
+            "character_profiles": dict(DEFAULT_CHARACTER_PROFILES),
             "agent_terminal": {
                 "enabled": True,
                 "permission": TERMINAL_PERMISSION_DEFAULT,
@@ -246,6 +434,7 @@ class AgentChatWindow(QMainWindow):
                 "show_thinking": False,
                 "pin_panel": False,
                 "composer_max_lines": DEFAULT_COMPOSER_MAX_LINES,
+                "character_card_ratio": DEFAULT_CHARACTER_CARD_RATIO,
             },
         }
         config_path = CONFIG_PATH if CONFIG_PATH.exists() else LEGACY_CONFIG_PATH
@@ -262,6 +451,7 @@ class AgentChatWindow(QMainWindow):
 
     def save_config(self):
         payload = {
+            "active_mode": self.active_mode,
             "server": {
                 "enabled": self.server_enabled,
                 "base_url": self.base_url,
@@ -278,6 +468,7 @@ class AgentChatWindow(QMainWindow):
                 "allow_plaintext_fallback": False,
                 "items": self.api_keys,
             },
+            "character_profiles": self.character_profiles,
             "agent_terminal": {
                 "enabled": self.agent_terminal_enabled,
                 "permission": self.agent_terminal_permission,
@@ -314,6 +505,7 @@ class AgentChatWindow(QMainWindow):
                     if hasattr(self, "composer_max_lines_spin")
                     else self.composer_max_lines
                 ),
+                "character_card_ratio": self.character_card_ratio,
             },
         }
         try:
@@ -337,8 +529,16 @@ class AgentChatWindow(QMainWindow):
             else {}
         )
         ui_payload = payload.get("ui") if isinstance(payload.get("ui"), dict) else {}
+        mode = normalize_mode(payload.get("active_mode", default_config.get("active_mode", MODE_CHAT)))
+        if mode != payload.get("active_mode", default_config.get("active_mode", MODE_CHAT)):
+            self.config_needs_save = True
+        if "active_mode" not in payload:
+            self.config_needs_save = True
+        if "character_profiles" not in payload:
+            self.config_needs_save = True
 
         return {
+            "active_mode": mode,
             "server": {
                 **default_config["server"],
                 **server_payload,
@@ -357,6 +557,9 @@ class AgentChatWindow(QMainWindow):
                 **api_keys_payload,
                 **self.normalize_api_keys_config(api_keys_payload, default_config["api_keys"]),
             },
+            "character_profiles": normalize_character_profiles(
+                payload.get("character_profiles", default_config["character_profiles"])
+            ),
             "agent_terminal": {
                 **default_config["agent_terminal"],
                 **terminal_payload,
@@ -387,8 +590,18 @@ class AgentChatWindow(QMainWindow):
                     "composer_max_lines",
                     payload.get("composer_max_lines", default_config["ui"]["composer_max_lines"]),
                 ),
+                "character_card_ratio": self.normalize_character_card_ratio(
+                    ui_payload.get(
+                        "character_card_ratio",
+                        default_config["ui"]["character_card_ratio"],
+                    )
+                ),
             },
         }
+
+    def normalize_character_card_ratio(self, value):
+        ratio = str(value or DEFAULT_CHARACTER_CARD_RATIO).strip()
+        return ratio if ratio in CHARACTER_CARD_RATIOS else DEFAULT_CHARACTER_CARD_RATIO
 
     def normalize_api_keys_config(self, payload, default_config):
         items = []
@@ -621,6 +834,8 @@ class AgentChatWindow(QMainWindow):
         return True
 
     def prompt_for_workspace_if_needed(self):
+        if self.active_mode != MODE_AGENT:
+            return
         if self.workspace_prompt_checked or self.workspace_path_config:
             return
         self.workspace_prompt_checked = True
@@ -734,6 +949,7 @@ class AgentChatWindow(QMainWindow):
 
         self.scroll_area.setWidget(self.chat_surface)
         self.sticky_code_header = StickyCodeHeader(self.scroll_area.viewport())
+        self.build_character_overlay()
 
         self.composer_frame = self.build_composer()
         self.composer_frame.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
@@ -751,6 +967,8 @@ class AgentChatWindow(QMainWindow):
         self.refresh_session_prompt_ui()
         self.refresh_rendering_ui()
         self.refresh_terminal_permission_ui()
+        self.refresh_character_ui()
+        self.refresh_mode_ui()
         self.update_empty_state()
         self.update_send_availability()
         self.apply_responsive_layout()
@@ -790,6 +1008,155 @@ class AgentChatWindow(QMainWindow):
         x = max(margin, (self.width() - self.toast_label.width()) // 2)
         y = max(margin, self.height() - self.toast_label.height() - margin)
         self.toast_label.move(x, y)
+
+    def build_character_overlay(self):
+        self.character_overlay = QFrame(self.content_frame)
+        self.character_overlay.setObjectName("characterOverlay")
+        self.character_overlay.hide()
+        overlay_layout = QVBoxLayout(self.character_overlay)
+        overlay_layout.setContentsMargins(22, 22, 22, 22)
+        overlay_layout.setSpacing(14)
+
+        header = QHBoxLayout()
+        title = QLabel("Change character")
+        title.setObjectName("overlayTitle")
+        header.addWidget(title)
+        header.addStretch()
+        self.character_ratio_button = QPushButton(self.character_card_ratio)
+        self.character_ratio_button.setObjectName("overlayRatioButton")
+        self.character_ratio_button.setToolTip("Card ratio")
+        self.character_ratio_menu = QMenu(self)
+        self.character_ratio_menu.setObjectName("historyMenu")
+        self.character_ratio_menu.aboutToShow.connect(self.refresh_character_ratio_menu)
+        self.character_ratio_button.setMenu(self.character_ratio_menu)
+        header.addWidget(self.character_ratio_button)
+        close_button = QPushButton("×")
+        close_button.setObjectName("overlayCloseButton")
+        close_button.clicked.connect(self.hide_character_overlay)
+        header.addWidget(close_button)
+        overlay_layout.addLayout(header)
+
+        self.character_overlay_scroll = QScrollArea()
+        self.character_overlay_scroll.setObjectName("characterOverlayScroll")
+        self.character_overlay_scroll.setWidgetResizable(True)
+        self.character_overlay_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.character_overlay_body = QWidget()
+        self.character_overlay_grid = QGridLayout(self.character_overlay_body)
+        self.character_overlay_grid.setContentsMargins(0, 0, 8, 0)
+        self.character_overlay_grid.setSpacing(22)
+        self.character_overlay_scroll.setWidget(self.character_overlay_body)
+        overlay_layout.addWidget(self.character_overlay_scroll, 1)
+
+    def refresh_character_ratio_menu(self):
+        self.character_ratio_menu.clear()
+        for ratio in CHARACTER_CARD_RATIOS:
+            action = self.character_ratio_menu.addAction(ratio)
+            action.setCheckable(True)
+            action.setChecked(ratio == self.character_card_ratio)
+            action.triggered.connect(
+                lambda _checked=False, value=ratio: self.set_character_card_ratio(value)
+            )
+
+    def set_character_card_ratio(self, ratio):
+        ratio = self.normalize_character_card_ratio(ratio)
+        if ratio == self.character_card_ratio:
+            return
+        self.character_card_ratio = ratio
+        if hasattr(self, "character_ratio_button"):
+            self.character_ratio_button.setText(ratio)
+        if hasattr(self, "character_overlay_grid"):
+            for index in range(self.character_overlay_grid.count()):
+                widget = self.character_overlay_grid.itemAt(index).widget()
+                if isinstance(widget, CharacterChoiceCard):
+                    widget.set_card_ratio(ratio)
+        self.save_config()
+
+    def character_overlay_card_width(self, columns):
+        gap = self.character_overlay_grid.spacing()
+        margins = self.character_overlay_grid.contentsMargins()
+        available_width = self.character_overlay_scroll.viewport().width()
+        if available_width <= 0:
+            available_width = max(0, self.character_overlay.width() - 44)
+        available_width = max(0, available_width - margins.left() - margins.right())
+        fit_width = (available_width - gap * max(0, columns - 1)) // max(1, columns)
+        return max(CHARACTER_CARD_MIN_WIDTH, min(CHARACTER_CARD_MAX_WIDTH, fit_width))
+
+    def character_overlay_column_count(self, item_count):
+        if item_count <= 0:
+            return 1
+        gap = self.character_overlay_grid.spacing()
+        margins = self.character_overlay_grid.contentsMargins()
+        available_width = self.character_overlay_scroll.viewport().width()
+        if available_width <= 0:
+            available_width = max(0, self.character_overlay.width() - 44)
+        available_width = max(0, available_width - margins.left() - margins.right())
+        columns = max(1, (available_width + gap) // (CHARACTER_CARD_MIN_WIDTH + gap))
+        return max(1, min(item_count, int(columns)))
+
+    def relayout_character_overlay_cards(self):
+        if not hasattr(self, "character_overlay_grid"):
+            return
+        cards = []
+        while self.character_overlay_grid.count():
+            item = self.character_overlay_grid.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                cards.append(widget)
+        columns = self.character_overlay_column_count(len(cards))
+        card_width = self.character_overlay_card_width(columns)
+        for index, card in enumerate(cards):
+            if isinstance(card, CharacterChoiceCard):
+                card.setFixedWidth(card_width)
+                card.update_card_height()
+                card.apply_rounded_mask()
+                card.position_content()
+            self.character_overlay_grid.addWidget(card, index // columns, index % columns)
+
+    def position_character_overlay(self):
+        if not hasattr(self, "character_overlay"):
+            return
+        margin = 18
+        self.character_overlay.setGeometry(
+            margin,
+            margin,
+            max(0, self.content_frame.width() - margin * 2),
+            max(0, self.content_frame.height() - margin * 2),
+        )
+        self.relayout_character_overlay_cards()
+
+    def show_character_overlay(self):
+        self.populate_character_overlay()
+        self.position_character_overlay()
+        self.character_overlay.raise_()
+        self.character_overlay.show()
+
+    def hide_character_overlay(self):
+        if hasattr(self, "character_overlay"):
+            self.character_overlay.hide()
+
+    def populate_character_overlay(self):
+        while self.character_overlay_grid.count():
+            item = self.character_overlay_grid.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        items = sort_characters(
+            self.character_profiles.get("items", []),
+            self.character_profiles.get("local_state", {}),
+        )
+        for index, character in enumerate(items):
+            card = CharacterChoiceCard(
+                character,
+                self.character_avatar_pixmap(character),
+                self.character_card_ratio,
+            )
+            card.selected.connect(self.select_character_from_overlay)
+            self.character_overlay_grid.addWidget(card, 0, index)
+        self.relayout_character_overlay_cards()
+
+    def select_character_from_overlay(self, character_id):
+        self.hide_character_overlay()
+        self.select_character(character_id)
 
     def build_sidebar(self):
         frame = QFrame()
@@ -847,7 +1214,7 @@ class AgentChatWindow(QMainWindow):
         title.setObjectName("titleLabel")
         content_layout.addWidget(title)
 
-        subtitle = QLabel("Model, sampling, and session controls.")
+        subtitle = QLabel("Choose a mode, model, and only the settings that apply.")
         subtitle.setObjectName("subtleLabel")
         subtitle.setWordWrap(True)
         content_layout.addWidget(subtitle)
@@ -860,6 +1227,29 @@ class AgentChatWindow(QMainWindow):
         self.status_detail.setObjectName("subtleLabel")
         self.status_detail.setWordWrap(True)
         content_layout.addWidget(self.status_detail)
+
+        mode_heading = QLabel("Mode")
+        mode_heading.setObjectName("sectionLabel")
+        content_layout.addWidget(mode_heading)
+
+        mode_row = QHBoxLayout()
+        mode_row.setSpacing(8)
+        self.mode_button_group = QButtonGroup(self)
+        self.mode_button_group.setExclusive(True)
+        self.mode_buttons = {}
+        for mode in (MODE_CHAT, MODE_CHARACTER, MODE_AGENT):
+            button = QPushButton(MODE_LABELS[mode])
+            button.setObjectName("modeButton")
+            button.setCheckable(True)
+            button.clicked.connect(lambda _checked=False, value=mode: self.set_active_mode(value))
+            self.mode_button_group.addButton(button)
+            self.mode_buttons[mode] = button
+            mode_row.addWidget(button)
+        content_layout.addLayout(mode_row)
+
+        model_heading = QLabel("Model")
+        model_heading.setObjectName("sectionLabel")
+        content_layout.addWidget(model_heading)
 
         self.model_selector = QPushButton("Select model")
         self.model_selector.setObjectName("modelSelectorButton")
@@ -1046,6 +1436,155 @@ class AgentChatWindow(QMainWindow):
         api_keys_section_layout.addWidget(self.api_key_detail)
         self.api_keys_section.setVisible(self.api_keys_enabled)
         layout.addWidget(self.api_keys_section)
+
+        self.character_section = QWidget()
+        character_section_layout = QVBoxLayout(self.character_section)
+        character_section_layout.setContentsMargins(0, 0, 0, 0)
+        character_section_layout.setSpacing(10)
+
+        character_heading = QLabel("Character")
+        character_heading.setObjectName("sectionLabel")
+        character_section_layout.addWidget(character_heading)
+
+        self.character_source_panel = QWidget()
+        character_source_panel_layout = QVBoxLayout(self.character_source_panel)
+        character_source_panel_layout.setContentsMargins(0, 0, 0, 0)
+        character_source_panel_layout.setSpacing(8)
+        self.character_source_top_label = QLabel("Source")
+        self.character_source_top_label.setObjectName("sectionLabel")
+        character_source_panel_layout.addWidget(self.character_source_top_label)
+
+        character_source_row = QHBoxLayout()
+        character_source_row.setSpacing(8)
+        self.character_source_input = QLineEdit()
+        self.character_source_input.setPlaceholderText("https://server.example/api/characters")
+        self.character_source_input.setText(self.character_profiles.get("source_url", ""))
+        self.character_source_input.returnPressed.connect(self.sync_characters)
+        character_source_row.addWidget(self.character_source_input, 1)
+
+        self.sync_characters_button = QPushButton("Sync")
+        self.sync_characters_button.setObjectName("ghostButton")
+        self.sync_characters_button.clicked.connect(self.sync_characters)
+        character_source_row.addWidget(self.sync_characters_button)
+        character_source_panel_layout.addLayout(character_source_row)
+        character_section_layout.addWidget(self.character_source_panel)
+
+        character_picker_row = QHBoxLayout()
+        character_picker_row.setSpacing(8)
+        self.character_picker_button = QPushButton("Change character")
+        self.character_picker_button.setObjectName("ghostButton")
+        self.character_picker_button.clicked.connect(self.show_character_menu)
+        character_picker_row.addWidget(self.character_picker_button, 1)
+
+        self.character_favorite_button = QPushButton("☆")
+        self.character_favorite_button.setObjectName("fieldIconButton")
+        self.character_favorite_button.setToolTip("Favorite character")
+        self.character_favorite_button.clicked.connect(self.toggle_active_character_favorite)
+        character_picker_row.addWidget(self.character_favorite_button)
+        character_section_layout.addLayout(character_picker_row)
+
+        self.character_hero_card = QFrame()
+        self.character_hero_card.setObjectName("characterHeroCard")
+        self.character_hero_card.setFixedHeight(306)
+        self.character_hero_card.installEventFilter(self)
+        self.character_avatar_label = QLabel("", self.character_hero_card)
+        self.character_avatar_label.setObjectName("characterHeroAvatar")
+        self.character_avatar_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.character_avatar_label.lower()
+
+        self.character_hero_favorite_button = QPushButton("☆")
+        self.character_hero_favorite_button.setObjectName("heroIconButton")
+        self.character_hero_favorite_button.setParent(self.character_hero_card)
+        self.character_hero_favorite_button.clicked.connect(self.toggle_active_character_favorite)
+
+        self.character_hero_menu_button = QPushButton("...")
+        self.character_hero_menu_button.setObjectName("heroIconButton")
+        self.character_hero_menu_button.setParent(self.character_hero_card)
+        self.character_hero_menu_button.clicked.connect(self.show_character_menu)
+
+        self.character_hero_info = QFrame(self.character_hero_card)
+        self.character_hero_info.setObjectName("characterHeroInfo")
+        hero_info_layout = QVBoxLayout(self.character_hero_info)
+        hero_info_layout.setContentsMargins(18, 18, 18, 14)
+        hero_info_layout.setSpacing(4)
+        self.character_name_label = QLabel("")
+        self.character_name_label.setObjectName("characterName")
+        self.character_name_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        hero_info_layout.addWidget(self.character_name_label)
+        self.character_style_label = QLabel("")
+        self.character_style_label.setObjectName("characterStyle")
+        self.character_style_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        hero_info_layout.addWidget(self.character_style_label)
+        self.character_tags_label = QLabel("")
+        self.character_tags_label.setObjectName("characterHeroTags")
+        self.character_tags_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        hero_info_layout.addWidget(self.character_tags_label)
+        character_section_layout.addWidget(self.character_hero_card)
+
+        self.character_access_section = QWidget()
+        access_layout = QVBoxLayout(self.character_access_section)
+        access_layout.setContentsMargins(0, 0, 0, 0)
+        access_layout.setSpacing(8)
+        access_heading = QLabel("Access")
+        access_heading.setObjectName("sectionLabel")
+        access_layout.addWidget(access_heading)
+        self.character_file_context_checkbox = self.add_character_switch_row(
+            access_layout,
+            "Files",
+            lambda checked: self.set_active_character_capability("file_context", checked),
+        )
+        self.character_url_context_checkbox = self.add_character_switch_row(
+            access_layout,
+            "Links",
+            lambda checked: self.set_active_character_capability("url_context", checked),
+        )
+        self.character_terminal_checkbox = self.add_character_switch_row(
+            access_layout,
+            "Terminal",
+            lambda checked: self.set_active_character_capability("terminal", checked),
+        )
+        character_section_layout.addWidget(self.character_access_section)
+
+        personality_row = QHBoxLayout()
+        personality_row.setSpacing(8)
+        self.character_personality_label = QLabel("")
+        self.character_personality_label.setObjectName("characterPersonality")
+        self.character_personality_label.setWordWrap(True)
+        personality_row.addWidget(self.character_personality_label, 1)
+        self.character_personality_view_button = QPushButton("View")
+        self.character_personality_view_button.setObjectName("inlineLinkButton")
+        self.character_personality_view_button.clicked.connect(self.show_character_personality)
+        personality_row.addWidget(self.character_personality_view_button, 0, Qt.AlignmentFlag.AlignBottom)
+
+        self.character_personality_section = QWidget()
+        personality_layout = QVBoxLayout(self.character_personality_section)
+        personality_layout.setContentsMargins(0, 0, 0, 0)
+        personality_layout.setSpacing(6)
+        personality_heading = QLabel("Personality")
+        personality_heading.setObjectName("sectionLabel")
+        personality_layout.addWidget(personality_heading)
+        personality_layout.addLayout(personality_row)
+        character_section_layout.addWidget(self.character_personality_section)
+
+        self.character_source_compact_section = QWidget()
+        source_compact_layout = QVBoxLayout(self.character_source_compact_section)
+        source_compact_layout.setContentsMargins(0, 0, 0, 0)
+        source_compact_layout.setSpacing(6)
+        source_compact_heading = QLabel("Source")
+        source_compact_heading.setObjectName("sectionLabel")
+        source_compact_layout.addWidget(source_compact_heading)
+        source_compact_row = QHBoxLayout()
+        source_compact_row.setSpacing(8)
+        self.character_sync_label = QLabel("")
+        self.character_sync_label.setObjectName("characterMeta")
+        source_compact_row.addWidget(self.character_sync_label, 1)
+        self.character_source_sync_button = QPushButton("Sync")
+        self.character_source_sync_button.setObjectName("inlineLinkButton")
+        self.character_source_sync_button.clicked.connect(self.sync_characters)
+        source_compact_row.addWidget(self.character_source_sync_button)
+        source_compact_layout.addLayout(source_compact_row)
+        character_section_layout.addWidget(self.character_source_compact_section)
+        layout.addWidget(self.character_section)
 
         self.workspace_section = QWidget()
         workspace_section_layout = QVBoxLayout(self.workspace_section)
@@ -1317,16 +1856,16 @@ class AgentChatWindow(QMainWindow):
         layout.setContentsMargins(24, 22, 24, 22)
         layout.setSpacing(10)
 
-        title = QLabel("Ready for a better local chat loop")
-        title.setObjectName("emptyTitle")
-        layout.addWidget(title)
+        self.empty_title = QLabel("Ready for a better local chat loop")
+        self.empty_title.setObjectName("emptyTitle")
+        layout.addWidget(self.empty_title)
 
-        body = QLabel(
+        self.empty_body = QLabel(
             "Pick a model, set an optional session prompt, then start chatting."
         )
-        body.setObjectName("emptyBody")
-        body.setWordWrap(True)
-        layout.addWidget(body)
+        self.empty_body.setObjectName("emptyBody")
+        self.empty_body.setWordWrap(True)
+        layout.addWidget(self.empty_body)
 
         actions = QHBoxLayout()
         actions.setSpacing(10)
@@ -1538,6 +2077,439 @@ class AgentChatWindow(QMainWindow):
         if hasattr(self, "assistant_rendering_section"):
             self.assistant_rendering_section.setVisible(self.assistant_rendering_enabled)
 
+    def set_active_mode(self, mode):
+        mode = normalize_mode(mode)
+        if self.active_mode == mode:
+            self.refresh_mode_ui()
+            self.refresh_terminal_permission_ui()
+            return
+        if self.worker is not None and self.worker.isRunning():
+            self.set_status_message("Wait for the current response before changing mode.")
+            self.refresh_mode_ui()
+            self.refresh_terminal_permission_ui()
+            return
+        if self.has_existing_conversation_content():
+            self.clear_chat()
+        self.active_mode = mode
+        self.save_config()
+        self.refresh_mode_ui()
+        self.refresh_terminal_permission_ui()
+        self.refresh_character_ui()
+        self.update_empty_state()
+        self.update_send_availability()
+        if mode == MODE_AGENT:
+            self.prompt_for_workspace_if_needed()
+        self.set_status_message(f"{MODE_LABELS[mode]} mode active.")
+
+    def refresh_mode_ui(self):
+        if hasattr(self, "mode_buttons"):
+            for mode, button in self.mode_buttons.items():
+                button.blockSignals(True)
+                button.setChecked(mode == self.active_mode)
+                button.blockSignals(False)
+                button.style().unpolish(button)
+                button.style().polish(button)
+        is_character = self.active_mode == MODE_CHARACTER
+        is_agent = self.active_mode == MODE_AGENT
+        character_terminal = is_character and bool(self.active_character_capabilities().get("terminal"))
+        tools_visible = is_agent or character_terminal
+        effective_terminal_enabled = self.is_terminal_enabled_for_request()
+        if hasattr(self, "session_prompt_section"):
+            self.session_prompt_section.setVisible(self.session_prompt_enabled and not is_character)
+        if hasattr(self, "character_section"):
+            self.character_section.setVisible(is_character)
+        if hasattr(self, "character_capabilities_section"):
+            self.character_capabilities_section.setVisible(is_character)
+        if hasattr(self, "workspace_section"):
+            self.workspace_section.setVisible(tools_visible)
+        if hasattr(self, "agent_terminal_section"):
+            self.agent_terminal_section.setVisible(tools_visible)
+        if hasattr(self, "agent_terminal_checkbox"):
+            self.agent_terminal_checkbox.setVisible(is_agent)
+        if hasattr(self, "side_terminal_permission_button"):
+            self.side_terminal_permission_button.setEnabled(effective_terminal_enabled)
+        if hasattr(self, "terminal_permission_button"):
+            self.terminal_permission_button.setVisible(tools_visible)
+            self.terminal_permission_button.setEnabled(effective_terminal_enabled)
+        if hasattr(self, "composer"):
+            self.composer.setPlaceholderText(self.composer_placeholder())
+
+    def composer_placeholder(self):
+        if self.active_mode == MODE_AGENT:
+            return "Ask for changes..."
+        if self.active_mode == MODE_CHARACTER:
+            character = self.active_character()
+            if character:
+                return f"Message {character.get('name', 'character')}..."
+            return "Select a character to start..."
+        return "Type your message..."
+
+    def add_character_switch_row(self, layout, label_text, callback):
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(10)
+        label = QLabel(label_text)
+        label.setObjectName("accessLabel")
+        row.addWidget(label, 1)
+        switch = QCheckBox("")
+        switch.setObjectName("switchCheckBox")
+        switch.toggled.connect(callback)
+        row.addWidget(switch, 0, Qt.AlignmentFlag.AlignRight)
+        layout.addLayout(row)
+        return switch
+
+    def refresh_character_ui(self):
+        character = self.active_character()
+        local_state = self.character_profiles.get("local_state", {})
+        if hasattr(self, "character_source_input"):
+            self.character_source_input.blockSignals(True)
+            self.character_source_input.setText(self.character_profiles.get("source_url", ""))
+            self.character_source_input.blockSignals(False)
+        if hasattr(self, "character_picker_button"):
+            if character:
+                self.character_picker_button.setText("Change character")
+                self.character_picker_button.setToolTip("Choose another character")
+                self.character_picker_button.setEnabled(True)
+            else:
+                self.character_picker_button.setText("Sync characters first")
+                self.character_picker_button.setToolTip("Sync character profiles to start.")
+                self.character_picker_button.setEnabled(False)
+        if hasattr(self, "character_favorite_button"):
+            favorite = bool(character and local_state.get(character.get("id"), {}).get("favorite"))
+            self.character_favorite_button.setText("★" if favorite else "☆")
+            self.character_favorite_button.setEnabled(bool(character))
+        if hasattr(self, "character_hero_favorite_button"):
+            favorite = bool(character and local_state.get(character.get("id"), {}).get("favorite"))
+            self.character_hero_favorite_button.setText("★" if favorite else "☆")
+            self.character_hero_favorite_button.setEnabled(bool(character))
+        if hasattr(self, "character_hero_menu_button"):
+            self.character_hero_menu_button.setEnabled(bool(character))
+        if hasattr(self, "character_source_panel"):
+            self.character_source_panel.setVisible(not bool(character))
+        if hasattr(self, "character_source_compact_section"):
+            self.character_source_compact_section.setVisible(bool(character))
+        if hasattr(self, "character_hero_card"):
+            self.character_hero_card.setVisible(bool(character))
+        if hasattr(self, "character_access_section"):
+            self.character_access_section.setVisible(bool(character))
+        if hasattr(self, "character_personality_section"):
+            self.character_personality_section.setVisible(bool(character))
+        if hasattr(self, "character_avatar_label"):
+            self.position_character_hero_elements()
+            self.refresh_character_avatar(character)
+        if hasattr(self, "character_name_label"):
+            if character:
+                self.character_name_label.setText(character.get("name", "Character"))
+            else:
+                self.character_name_label.setText("")
+        if hasattr(self, "character_style_label"):
+            meta_parts = []
+            if character and character.get("style"):
+                meta_parts.append(character.get("style", "").title())
+            if character and character.get("tags"):
+                meta_parts.extend(character.get("tags", [])[:3])
+            self.character_style_label.setText(" · ".join(meta_parts))
+            self.character_style_label.setVisible(bool(meta_parts))
+        if hasattr(self, "character_tags_label"):
+            self.character_tags_label.setText("")
+            self.character_tags_label.hide()
+        if hasattr(self, "character_personality_label"):
+            personality = character.get("description", "") if character else ""
+            self.character_personality_label.setText(self.elide_multiline_text(personality, 92))
+            self.character_personality_label.setToolTip(personality)
+        if hasattr(self, "character_personality_view_button"):
+            personality = character.get("description", "") if character else ""
+            self.character_personality_view_button.setVisible(len(personality) > 92)
+        if hasattr(self, "character_sync_label"):
+            last_sync = self.character_profiles.get("last_sync")
+            self.character_sync_label.setText(self.character_sync_text(last_sync))
+            self.character_sync_label.setVisible(bool(character))
+        if hasattr(self, "character_prompt_heading"):
+            self.character_prompt_heading.setVisible(bool(character))
+        if hasattr(self, "character_prompt_preview"):
+            if character:
+                preview = character.get("system_prompt", "")
+                if len(preview) > 180:
+                    preview = preview[:177] + "..."
+                self.character_prompt_preview.setText(preview)
+            else:
+                self.character_prompt_preview.setText("Sync character profiles from your server to start.")
+        caps = self.active_character_capabilities()
+        for key, checkbox_name in (
+            ("file_context", "character_file_context_checkbox"),
+            ("url_context", "character_url_context_checkbox"),
+            ("terminal", "character_terminal_checkbox"),
+        ):
+            if hasattr(self, checkbox_name):
+                checkbox = getattr(self, checkbox_name)
+                checkbox.blockSignals(True)
+                checkbox.setChecked(bool(caps.get(key)))
+                checkbox.setEnabled(bool(character))
+                checkbox.blockSignals(False)
+        if hasattr(self, "composer"):
+            self.composer.setPlaceholderText(self.composer_placeholder())
+        self.refresh_mode_ui()
+
+    def elide_multiline_text(self, text, max_chars):
+        text = " ".join(str(text or "").split())
+        if len(text) <= max_chars:
+            return text
+        return text[: max(0, max_chars - 3)].rstrip() + "..."
+
+    def character_sync_text(self, value):
+        if not value:
+            return "Not synced yet"
+        try:
+            timestamp = datetime.fromisoformat(str(value))
+        except ValueError:
+            return f"Synced {value}"
+        now = datetime.now()
+        day = "today" if timestamp.date() == now.date() else timestamp.strftime("%Y-%m-%d")
+        return f"Synced {day} {timestamp.strftime('%H:%M')}"
+
+    def show_character_personality(self):
+        character = self.active_character()
+        if not character:
+            return
+        QMessageBox.information(
+            self,
+            f"{character.get('name', 'Character')} personality",
+            character.get("description", "") or "No personality text available.",
+        )
+
+    def animate_character_source_reveal(self):
+        if not hasattr(self, "character_source_compact_section"):
+            return
+        if self.character_source_compact_section.isHidden():
+            return
+        self.character_source_animation = QPropertyAnimation(
+            self.character_source_compact_section,
+            b"maximumHeight",
+            self,
+        )
+        self.character_source_animation.setDuration(260)
+        self.character_source_animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self.character_source_animation.setStartValue(0)
+        self.character_source_animation.setEndValue(
+            max(1, self.character_source_compact_section.sizeHint().height())
+        )
+        self.character_source_compact_section.setMaximumHeight(0)
+        self.character_source_animation.finished.connect(
+            lambda: self.character_source_compact_section.setMaximumHeight(16777215)
+        )
+        self.character_source_animation.start()
+
+    def refresh_character_tags(self, tags):
+        while self.character_tags_layout.count():
+            item = self.character_tags_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        for tag in tags[:4]:
+            chip = QLabel(str(tag))
+            chip.setObjectName("characterTag")
+            self.character_tags_layout.addWidget(chip)
+        self.character_tags_layout.addStretch()
+        self.character_tags_widget.setVisible(bool(tags))
+
+    def refresh_character_avatar(self, character):
+        self.character_avatar_label.clear()
+        if not character:
+            self.character_avatar_label.setText("No\navatar")
+            return
+        pixmap = self.character_avatar_pixmap(character)
+        if pixmap and not pixmap.isNull():
+            target_size = self.character_avatar_label.size()
+            if target_size.width() <= 0 or target_size.height() <= 0:
+                target_size = self.character_hero_card.size()
+            self.character_avatar_label.setPixmap(
+                pixmap.scaled(
+                    target_size,
+                    Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+            )
+            return
+        initials = "".join(part[:1] for part in character.get("name", "").split()[:2]).upper()
+        self.character_avatar_label.setText(initials or "AI")
+
+    def position_character_hero_elements(self):
+        if not hasattr(self, "character_hero_card"):
+            return
+        width = max(0, self.character_hero_card.width())
+        height = max(0, self.character_hero_card.height())
+        if width <= 0 or height <= 0:
+            return
+        self.character_avatar_label.setGeometry(0, 0, width, height)
+        button_y = 12
+        self.character_hero_menu_button.setGeometry(width - 44, button_y, 32, 28)
+        self.character_hero_favorite_button.setGeometry(width - 80, button_y, 32, 28)
+        info_width = width
+        info_height = 92
+        self.character_hero_info.setGeometry(
+            0,
+            height - info_height,
+            info_width,
+            info_height,
+        )
+        self.character_avatar_label.lower()
+        self.character_hero_info.raise_()
+        self.character_hero_favorite_button.raise_()
+        self.character_hero_menu_button.raise_()
+
+    def character_avatar_pixmap(self, character):
+        avatar_url = str(character.get("avatar_url") or "").strip()
+        if not avatar_url:
+            return QPixmap()
+        try:
+            if avatar_url.startswith(("http://", "https://")):
+                response = requests.get(avatar_url, timeout=8)
+                response.raise_for_status()
+                return self.pixmap_from_bytes(response.content, avatar_url)
+        except Exception:
+            return QPixmap()
+        return QPixmap()
+
+    def pixmap_from_path(self, path):
+        try:
+            data = path.read_bytes()
+        except OSError:
+            return QPixmap()
+        return self.pixmap_from_bytes(data, str(path))
+
+    def pixmap_from_bytes(self, data, source_name=""):
+        if not data:
+            return QPixmap()
+        if source_name.lower().split("?", 1)[0].endswith(".svg") or data.lstrip().startswith(b"<svg"):
+            pixmap = QPixmap(768, 768)
+            pixmap.fill(Qt.GlobalColor.transparent)
+            painter = QPainter(pixmap)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+            renderer = QSvgRenderer(QByteArray(data))
+            renderer.render(painter, QRectF(0, 0, 768, 768))
+            painter.end()
+            return pixmap
+        pixmap = QPixmap()
+        pixmap.loadFromData(data)
+        return pixmap
+
+    def sync_characters(self):
+        if not hasattr(self, "character_source_input"):
+            return
+        source_url = self.character_source_input.text().strip()
+        if not source_url:
+            self.set_status_message("Enter a character source URL.")
+            return
+        self.sync_characters_button.setEnabled(False)
+        if hasattr(self, "character_source_sync_button"):
+            self.character_source_sync_button.setEnabled(False)
+        self.set_status_message("Syncing character profiles...")
+        try:
+            response = requests.get(source_url, timeout=20)
+            response.raise_for_status()
+            payload = response.json()
+            raw_items = payload.get("characters", []) if isinstance(payload, dict) else []
+            items = []
+            seen_ids = set()
+            for raw_item in raw_items:
+                item = normalize_character(raw_item)
+                if not item or item["id"] in seen_ids:
+                    continue
+                seen_ids.add(item["id"])
+                items.append(item)
+            if not items:
+                raise ValueError("No valid characters found.")
+
+            previous_state = self.character_profiles.get("local_state", {})
+            active_id = self.character_profiles.get("active_character_id")
+            if active_id not in seen_ids:
+                active_id = items[0]["id"]
+            self.character_profiles = {
+                "source_url": source_url,
+                "last_sync": datetime.now().isoformat(timespec="seconds"),
+                "active_character_id": active_id,
+                "items": items,
+                "local_state": {
+                    key: value for key, value in previous_state.items() if key in seen_ids
+                },
+            }
+            self.save_config()
+            self.refresh_character_ui()
+            self.animate_character_source_reveal()
+            self.update_send_availability()
+            self.set_status_message(f"Synced {len(items)} character profile(s).")
+            self.show_toast("Characters synced")
+        except Exception as exc:
+            if self.character_profiles.get("items"):
+                self.set_status_message(f"Could not sync characters. Using cached profiles. {exc}")
+            else:
+                self.set_status_message(f"No character profiles available. {exc}")
+        finally:
+            self.sync_characters_button.setEnabled(True)
+            if hasattr(self, "character_source_sync_button"):
+                self.character_source_sync_button.setEnabled(True)
+
+    def show_character_menu(self):
+        items = sort_characters(
+            self.character_profiles.get("items", []),
+            self.character_profiles.get("local_state", {}),
+        )
+        if not items:
+            return
+        if self.sidebar_pinned:
+            self.show_character_overlay()
+            return
+        menu = QMenu(self)
+        menu.setObjectName("historyMenu")
+        active_id = self.character_profiles.get("active_character_id")
+        local_state = self.character_profiles.get("local_state", {})
+        for item in items:
+            prefix = "★ " if local_state.get(item.get("id"), {}).get("favorite") else ""
+            action = menu.addAction(prefix + item.get("name", "Character"))
+            action.setEnabled(item.get("id") != active_id)
+            if item.get("id") != active_id:
+                action.triggered.connect(
+                    lambda _checked=False, character_id=item.get("id"): self.select_character(character_id)
+                )
+        menu.exec(self.character_picker_button.mapToGlobal(self.character_picker_button.rect().bottomLeft()))
+
+    def select_character(self, character_id):
+        if not any(item.get("id") == character_id for item in self.character_profiles.get("items", [])):
+            return
+        if self.worker is not None and self.worker.isRunning():
+            self.set_status_message("Wait for the current response before changing character.")
+            return
+        if self.has_existing_conversation_content():
+            self.clear_chat()
+        self.character_profiles["active_character_id"] = character_id
+        self.save_config()
+        self.refresh_character_ui()
+        self.update_empty_state()
+        self.update_send_availability()
+
+    def toggle_active_character_favorite(self):
+        character = self.active_character()
+        if not character:
+            return
+        character_id = character.get("id")
+        state = self.character_profiles.setdefault("local_state", {}).get(character_id, {})
+        set_character_favorite(self.character_profiles, character_id, not state.get("favorite", False))
+        self.save_config()
+        self.refresh_character_ui()
+
+    def set_active_character_capability(self, key, value):
+        character = self.active_character()
+        if not character:
+            return
+        set_character_capability(self.character_profiles, character.get("id"), key, value)
+        if key == "file_context" and not value and self.pending_attachments:
+            self.clear_attachments()
+        self.save_config()
+        self.refresh_character_ui()
+        self.refresh_terminal_permission_ui()
+        self.update_send_availability()
+
     def set_agent_terminal_enabled(self, enabled):
         self.agent_terminal_enabled = bool(enabled)
         if not self.agent_terminal_enabled and self.pending_terminal_permission and self.worker is not None:
@@ -1547,6 +2519,7 @@ class AgentChatWindow(QMainWindow):
                 self.terminal_approval_banner.hide()
         self.save_config()
         self.refresh_terminal_permission_ui()
+        self.refresh_mode_ui()
         self.set_status_message(
             f"Terminal agent enabled. Commands run in {self.workspace_path}."
             if self.agent_terminal_enabled
@@ -1651,8 +2624,9 @@ class AgentChatWindow(QMainWindow):
 
     def refresh_terminal_permission_ui(self):
         label = self.agent_terminal_permission_label()
+        effective_terminal_enabled = self.is_terminal_enabled_for_request()
         if hasattr(self, "terminal_permission_button"):
-            suffix = " enabled" if self.agent_terminal_enabled else " disabled"
+            suffix = " enabled" if effective_terminal_enabled else " disabled"
             self.terminal_permission_button.setText(label)
             self.terminal_permission_button.setIcon(self.terminal_permission_icon(self.agent_terminal_permission))
             self.terminal_permission_button.setToolTip(f"Terminal access is{suffix}.")
@@ -1662,7 +2636,7 @@ class AgentChatWindow(QMainWindow):
             )
             self.terminal_permission_button.style().unpolish(self.terminal_permission_button)
             self.terminal_permission_button.style().polish(self.terminal_permission_button)
-            self.terminal_permission_button.setEnabled(self.agent_terminal_enabled)
+            self.terminal_permission_button.setEnabled(effective_terminal_enabled)
         if hasattr(self, "agent_terminal_checkbox"):
             self.agent_terminal_checkbox.blockSignals(True)
             self.agent_terminal_checkbox.setChecked(self.agent_terminal_enabled)
@@ -1676,13 +2650,11 @@ class AgentChatWindow(QMainWindow):
             )
             self.side_terminal_permission_button.style().unpolish(self.side_terminal_permission_button)
             self.side_terminal_permission_button.style().polish(self.side_terminal_permission_button)
-            self.side_terminal_permission_button.setEnabled(self.agent_terminal_enabled)
+            self.side_terminal_permission_button.setEnabled(effective_terminal_enabled)
         if hasattr(self, "default_permissions_detail"):
             allowed = ", ".join(self.default_permissions)
             self.default_permissions_detail.setText(f"Default commands: {allowed}")
             self.default_permissions_detail.setToolTip("")
-        if hasattr(self, "agent_terminal_section"):
-            self.agent_terminal_section.setVisible(self.agent_terminal_enabled)
 
     def detect_attachment_type(self, path):
         mime_type, _ = mimetypes.guess_type(path)
@@ -1706,6 +2678,9 @@ class AgentChatWindow(QMainWindow):
         return Path(path).suffix.lower() in TEXT_PREVIEW_SUFFIXES
 
     def add_attachments(self):
+        if not self.attachments_allowed_for_mode():
+            self.set_status_message("File attachments are disabled for this character.")
+            return
         paths, _ = QFileDialog.getOpenFileNames(
             self,
             "Attach files",
@@ -1715,6 +2690,9 @@ class AgentChatWindow(QMainWindow):
         self.add_attachment_paths(paths)
 
     def add_attachment_paths(self, paths):
+        if not self.attachments_allowed_for_mode():
+            self.set_status_message("File attachments are disabled for this character.")
+            return
         if not paths:
             return
         added = False
@@ -2081,6 +3059,8 @@ class AgentChatWindow(QMainWindow):
         self.update_model_selector_text()
         self.update_sticky_code_header()
         self.position_toast()
+        self.position_character_overlay()
+        self.position_character_hero_elements()
 
     def refresh_server_state(self):
         self.status_badge.setText("Checking OpenAI-compatible server…")
@@ -2584,17 +3564,28 @@ class AgentChatWindow(QMainWindow):
     def update_send_availability(self):
         has_text = bool(self.composer.toPlainText().strip()) or bool(self.pending_attachments)
         has_model = bool(self.available_models) and bool(self.current_model_name())
+        character_ready = self.active_mode != MODE_CHARACTER or self.active_character() is not None
         busy = self.worker is not None and self.worker.isRunning()
         if has_text:
-            self.configure_send_action_button("send", enabled=has_model)
+            self.configure_send_action_button("send", enabled=has_model and character_ready)
         elif busy:
             self.configure_send_action_button("stop", enabled=True)
         else:
             self.configure_send_action_button("send", enabled=False)
         self.model_selector.setEnabled(bool(self.available_models) and not busy)
-        self.attach_button.setEnabled(True)
+        self.attach_button.setEnabled(self.attachments_allowed_for_mode())
         self.clear_attachments_button.setEnabled(bool(self.pending_attachments))
         self.refresh_queue_ui()
+
+    def attachments_allowed_for_mode(self):
+        if self.active_mode != MODE_CHARACTER:
+            return True
+        return bool(self.active_character_capabilities().get("file_context"))
+
+    def url_context_allowed_for_mode(self):
+        if self.active_mode != MODE_CHARACTER:
+            return True
+        return bool(self.active_character_capabilities().get("url_context"))
 
     def configure_send_action_button(self, mode, enabled):
         icon_path = STOP_ICON_PATH if mode == "stop" else ARROW_UP_ICON_PATH
@@ -2637,9 +3628,14 @@ class AgentChatWindow(QMainWindow):
         )
 
     def make_submission(self, user_text, attachments):
+        if self.active_mode == MODE_CHARACTER and self.active_character() is None:
+            raise ValueError("Select a character before sending.")
         prompt_text = user_text.strip()
-        self.set_status_message("Reading links..." if self.detect_urls(prompt_text) else "Preparing message...")
-        url_inputs = self.fetch_urls_for_prompt(prompt_text) if prompt_text else []
+        if attachments and not self.attachments_allowed_for_mode():
+            raise ValueError("File attachments are disabled for this character.")
+        should_fetch_urls = bool(prompt_text and self.url_context_allowed_for_mode())
+        self.set_status_message("Reading links..." if should_fetch_urls and self.detect_urls(prompt_text) else "Preparing message...")
+        url_inputs = self.fetch_urls_for_prompt(prompt_text) if should_fetch_urls else []
         user_message = self.build_user_message(prompt_text, attachments, url_inputs)
         if prompt_text:
             user_display = prompt_text
@@ -2691,7 +3687,8 @@ class AgentChatWindow(QMainWindow):
         return True
 
     def process_submission(self, submission):
-        self.lock_session_prompt_if_needed()
+        if self.active_mode != MODE_CHARACTER:
+            self.lock_session_prompt_if_needed()
         self.last_submitted_user_text = submission["user_text"]
         self.pending_user_text = submission["user_text"]
         self.pending_user_message = submission["user_message"]
@@ -2711,16 +3708,24 @@ class AgentChatWindow(QMainWindow):
         self.status_badge.setText("Generating")
         self.status_detail.setText(f"Streaming from {submission['model_name']}.{suffix}")
 
+        messages = self.build_messages_payload(submission["user_message"])
+        if messages is None:
+            self.set_status_message("Select a character before sending.")
+            self.current_assistant_card.stop_loading()
+            self.current_assistant_card.update_text("_Select a character before sending._")
+            self.update_send_availability()
+            return
+
         self.worker = ChatCompletionWorker(self)
         self.worker.configure(
             base_url=self.base_url,
             model_name=submission["model_name"],
-            messages=self.build_messages_payload(submission["user_message"]),
+            messages=messages,
             temperature=self.temperature_spin.value(),
             top_p=self.top_p_spin.value(),
             top_k=self.top_k_spin.value(),
             api_key=self.current_api_key_value(),
-            agent_terminal_enabled=self.agent_terminal_enabled,
+            agent_terminal_enabled=self.is_terminal_enabled_for_request(),
             agent_terminal_permission=self.agent_terminal_permission,
             default_permissions=self.default_permissions,
             terminal_cwd=str(self.workspace_path),
@@ -2842,7 +3847,9 @@ class AgentChatWindow(QMainWindow):
         self.apply_prompt_button.style().unpolish(self.apply_prompt_button)
         self.apply_prompt_button.style().polish(self.apply_prompt_button)
         if hasattr(self, "session_prompt_section"):
-            self.session_prompt_section.setVisible(self.session_prompt_enabled)
+            self.session_prompt_section.setVisible(
+                self.session_prompt_enabled and self.active_mode != MODE_CHARACTER
+            )
         self.refresh_session_prompt_history_ui()
 
     def build_user_message(self, user_text, attachments, url_inputs=None):
@@ -2898,17 +3905,54 @@ class AgentChatWindow(QMainWindow):
         return {"role": "user", "content": content}
 
     def build_messages_payload(self, user_message):
-        messages = []
-        system_sections = []
-        if self.agent_terminal_enabled:
-            system_sections.append(agent_terminal_prompt(self.workspace_path))
-        if self.session_prompt_enabled and self.session_system_prompt:
-            system_sections.append(self.session_system_prompt)
-        if system_sections:
-            messages.append({"role": "system", "content": "\n\n".join(system_sections)})
-        messages.extend(self.history)
-        messages.append(user_message)
-        return messages
+        return build_messages(
+            self.request_config_snapshot(),
+            self.history,
+            user_message,
+            terminal_instruction=(
+                agent_terminal_prompt(self.workspace_path)
+                if self.is_terminal_enabled_for_request()
+                else None
+            ),
+        )
+
+    def request_config_snapshot(self):
+        return {
+            "active_mode": self.active_mode,
+            "session_prompt": {
+                "enabled": self.session_prompt_enabled,
+                "value": self.session_system_prompt,
+                "history": self.session_prompt_history,
+            },
+            "character_profiles": self.character_profiles,
+            "agent_terminal": {
+                "enabled": self.agent_terminal_enabled,
+                "permission": self.agent_terminal_permission,
+                "default_permissions": self.default_permissions,
+            },
+            "workspace": {
+                "path": str(self.workspace_path),
+            },
+        }
+
+    def active_character(self):
+        return get_active_character(self.character_profiles)
+
+    def active_character_capabilities(self):
+        character = self.active_character()
+        if not character:
+            return {}
+        return get_effective_character_capabilities(
+            character,
+            self.character_profiles.get("local_state", {}),
+        )
+
+    def is_terminal_enabled_for_request(self):
+        if self.active_mode == MODE_AGENT:
+            return bool(self.agent_terminal_enabled)
+        if self.active_mode == MODE_CHARACTER:
+            return bool(self.active_character_capabilities().get("terminal"))
+        return False
 
     def send_message(self):
         if self.worker is not None and self.worker.isRunning():
@@ -3118,6 +4162,24 @@ class AgentChatWindow(QMainWindow):
                 widget.set_thinking_visibility(visible)
 
     def update_empty_state(self):
+        if hasattr(self, "empty_title") and hasattr(self, "empty_body"):
+            if self.active_mode == MODE_AGENT:
+                self.empty_title.setText("Ready for local agent work")
+                self.empty_body.setText("Choose a workspace, enable terminal access, then ask for changes.")
+            elif self.active_mode == MODE_CHARACTER:
+                character = self.active_character()
+                if character:
+                    self.empty_title.setText(f"Chat with {character.get('name', 'Character')}")
+                    self.empty_body.setText(
+                        character.get("greeting")
+                        or "Start a conversation with the selected character."
+                    )
+                else:
+                    self.empty_title.setText("No character selected")
+                    self.empty_body.setText("Sync character profiles from your server to start.")
+            else:
+                self.empty_title.setText("Start a new conversation")
+                self.empty_body.setText("Ask anything, attach files, or provide URL context.")
         self.empty_state.setVisible(self.messages_layout.count() == 0)
 
     def update_sticky_code_header(self, *_args):
@@ -3154,11 +4216,18 @@ class AgentChatWindow(QMainWindow):
         self.sticky_code_header.show()
 
     def eventFilter(self, watched, event):
-        if watched == self.scroll_area.viewport() and event.type() in (
+        if hasattr(self, "scroll_area") and watched == self.scroll_area.viewport() and event.type() in (
             QEvent.Type.Resize,
             QEvent.Type.Show,
         ):
             QTimer.singleShot(0, self.update_sticky_code_header)
+        if (
+            hasattr(self, "character_hero_card")
+            and watched == self.character_hero_card
+            and event.type() in (QEvent.Type.Resize, QEvent.Type.Show)
+        ):
+            QTimer.singleShot(0, self.position_character_hero_elements)
+            QTimer.singleShot(0, lambda: self.refresh_character_avatar(self.active_character()))
         if (
             self.assistant_reply_focus_active
             and watched in (self.scroll_area.viewport(), self.scroll_area.verticalScrollBar())

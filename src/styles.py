@@ -88,6 +88,26 @@ QPushButton#ghostButton {
 QPushButton#ghostButton:hover {
     background: #181a1c;
 }
+QPushButton#modeButton {
+    background: transparent;
+    border-color: #2a2d30;
+    min-height: 22px;
+    padding: 9px 12px;
+}
+QPushButton#modeButton:hover {
+    background: #181a1c;
+    border-color: #3a3f44;
+}
+QPushButton#modeButton:checked {
+    background: #f2f3f5;
+    color: #111315;
+    border-color: #f2f3f5;
+    font-weight: 600;
+}
+QPushButton#modeButton:checked:hover {
+    background: #ffffff;
+    border-color: #ffffff;
+}
 QPushButton#tinyButton {
     padding: 6px 10px;
     border-radius: 10px;
@@ -192,6 +212,18 @@ QPushButton#fieldIconButton[applied="true"] {
     color: #f2f3f5;
     border-color: #f2f3f5;
 }
+QPushButton#inlineLinkButton {
+    background: transparent;
+    border: none;
+    color: #f2f3f5;
+    padding: 2px 0;
+    font-size: 10pt;
+    font-weight: 600;
+}
+QPushButton#inlineLinkButton:hover {
+    color: #ffffff;
+    text-decoration: underline;
+}
 QLabel#statusBadge {
     background: #17191b;
     border: 1px solid #2a2d30;
@@ -208,6 +240,168 @@ QLabel#sessionPromptBadge {
     color: #d7d9dc;
     font-size: 9.5pt;
     font-weight: 600;
+}
+QFrame#characterHeroCard {
+    background: #111315;
+    border: 1px solid #2a2d30;
+    border-radius: 6px;
+}
+QPushButton#heroIconButton {
+    min-width: 28px;
+    max-width: 28px;
+    min-height: 26px;
+    max-height: 26px;
+    padding: 0;
+    border: none;
+    background: rgba(15, 16, 17, 120);
+    color: #f2f3f5;
+    font-size: 11pt;
+    font-weight: 700;
+}
+QPushButton#heroIconButton:hover {
+    background: rgba(242, 243, 245, 35);
+}
+QLabel#characterHeroAvatar {
+    background: #101214;
+    color: #8c9298;
+    font-size: 16pt;
+    font-weight: 700;
+}
+QFrame#characterHeroInfo {
+    background: qlineargradient(
+        x1:0, y1:0, x2:0, y2:1,
+        stop:0 rgba(8, 10, 12, 0),
+        stop:0.36 rgba(8, 10, 12, 158),
+        stop:1 rgba(8, 10, 12, 232)
+    );
+    border: none;
+    border-radius: 0px;
+    min-width: 0px;
+}
+QLabel#characterName {
+    color: #ffffff;
+    font-size: 15pt;
+    font-weight: 700;
+}
+QLabel#characterStyle {
+    color: #dfe5ea;
+    font-size: 9.5pt;
+    font-weight: 600;
+}
+QLabel#characterHeroTags {
+    color: #bfc6ce;
+    font-size: 9.5pt;
+    font-weight: 600;
+}
+QLabel#characterPersonality {
+    color: #c5c9ce;
+    font-size: 10pt;
+}
+QLabel#characterMeta {
+    color: #c5c9ce;
+    font-size: 10pt;
+}
+QLabel#accessLabel {
+    color: #e8eaed;
+    font-size: 10.5pt;
+    font-weight: 600;
+}
+QCheckBox#switchCheckBox {
+    spacing: 0;
+}
+QCheckBox#switchCheckBox::indicator {
+    width: 38px;
+    height: 20px;
+    border-radius: 10px;
+    border: 1px solid #3a3f44;
+    background: #141618;
+}
+QCheckBox#switchCheckBox::indicator:checked {
+    border-color: #f2f3f5;
+    background: #f2f3f5;
+}
+QCheckBox#switchCheckBox::indicator:hover {
+    border-color: #7d858d;
+}
+QFrame#characterOverlay {
+    background: rgba(8, 9, 10, 236);
+    border: 1px solid #25292e;
+    border-radius: 18px;
+}
+QLabel#overlayTitle {
+    color: #f4f5f6;
+    font-size: 18pt;
+    font-weight: 700;
+}
+QPushButton#overlayCloseButton {
+    min-width: 34px;
+    max-width: 34px;
+    min-height: 34px;
+    max-height: 34px;
+    padding: 0;
+    border-radius: 10px;
+    background: #17191b;
+    border: 1px solid #2a2d30;
+}
+QPushButton#overlayRatioButton {
+    min-width: 58px;
+    max-width: 58px;
+    min-height: 34px;
+    max-height: 34px;
+    padding: 0 8px;
+    border-radius: 10px;
+    background: #17191b;
+    border: 1px solid #2a2d30;
+    color: #f4f5f6;
+    font-size: 10pt;
+    font-weight: 700;
+}
+QPushButton#overlayRatioButton:hover {
+    background: #202326;
+    border-color: #3a3f44;
+}
+QScrollArea#characterOverlayScroll {
+    background: transparent;
+    border: none;
+}
+QFrame#characterChoiceCard {
+    background: #101214;
+    border: none;
+    border-radius: 16px;
+}
+QFrame#characterChoiceCard:hover,
+QFrame#characterChoiceCard[expanded="true"] {
+    background: #121518;
+}
+QLabel#characterChoiceCover {
+    background: #101214;
+    color: #8c9298;
+    font-size: 18pt;
+    font-weight: 700;
+}
+QFrame#characterChoiceInfo {
+    background: qlineargradient(
+        x1:0, y1:0, x2:0, y2:1,
+        stop:0 rgba(8, 10, 12, 0),
+        stop:0.34 rgba(8, 10, 12, 162),
+        stop:1 rgba(8, 10, 12, 236)
+    );
+    border: none;
+}
+QLabel#characterChoiceName {
+    color: #ffffff;
+    font-size: 13pt;
+    font-weight: 700;
+}
+QLabel#characterChoiceMeta {
+    color: #dfe5ea;
+    font-size: 9.5pt;
+    font-weight: 600;
+}
+QLabel#characterChoiceDescription {
+    color: #f0f3f6;
+    font-size: 10pt;
+    font-weight: 500;
 }
 QFrame#queueBanner {
     background: #181a1c;
