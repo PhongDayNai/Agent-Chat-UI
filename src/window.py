@@ -1498,10 +1498,33 @@ class AgentChatWindow(QMainWindow):
         if self.agent_terminal_permission == value:
             self.refresh_terminal_permission_ui()
             return
+        if (
+            value == TERMINAL_PERMISSION_FULL_ACCESS
+            and self.agent_terminal_permission != TERMINAL_PERMISSION_FULL_ACCESS
+            and not self.confirm_full_access_terminal_permission()
+        ):
+            self.refresh_terminal_permission_ui()
+            self.set_status_message("Full terminal access was not enabled.")
+            return
         self.agent_terminal_permission = value
         self.save_config()
         self.refresh_terminal_permission_ui()
         self.set_status_message(f"Terminal permission set to {self.agent_terminal_permission_label()}.")
+
+    def confirm_full_access_terminal_permission(self):
+        dialog = QMessageBox(self)
+        dialog.setIcon(QMessageBox.Icon.Warning)
+        dialog.setWindowTitle("Enable full terminal access?")
+        dialog.setText("Full access lets the assistant run terminal commands without asking first.")
+        dialog.setInformativeText(
+            "Only enable this for workspaces and commands you trust. "
+            "Default permissions will keep asking before commands outside the allowlist."
+        )
+        enable_button = dialog.addButton("Enable full access", QMessageBox.ButtonRole.AcceptRole)
+        dialog.addButton(QMessageBox.StandardButton.Cancel)
+        dialog.setDefaultButton(QMessageBox.StandardButton.Cancel)
+        dialog.exec()
+        return dialog.clickedButton() == enable_button
 
     def agent_terminal_permission_label(self):
         if self.agent_terminal_permission == TERMINAL_PERMISSION_FULL_ACCESS:
