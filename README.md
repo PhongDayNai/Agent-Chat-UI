@@ -1,12 +1,12 @@
 # Agent Chat UI
 
-Version: 1.2
+Version: 2.0
 
 Agent Chat UI is a PyQt6 desktop chat client for OpenAI-compatible chat
-completion APIs. The v1.2 release is a normal desktop chat app: choose a server
-URL, load models from the API, send messages, attach context, and stream
-responses in the UI. v1.2 stores named API key secrets in the operating
-system keychain when available.
+completion APIs. The v2.0 release splits the app into Chat, Character, and
+Agent modes so new users see fewer unrelated controls while local agent
+workflows still have terminal access when needed. API key secrets are stored in
+the operating system keychain when available.
 
 The default target is still `http://localhost:8080`, so unauthenticated local
 servers such as `llama-server` keep working without an API key. For hosted or
@@ -29,8 +29,10 @@ lightweight while still exposing the tools that make desktop chat useful:
 - localhost-first defaults for unauthenticated local model servers
 - named API keys for authenticated OpenAI-compatible endpoints
 - model selection from the server's `/v1/models` endpoint
+- Chat, Character, and Agent modes with mode-specific side panel controls
 - session prompts that lock in only when the first message is sent
 - optional terminal execution for local agent workflows
+- synced character profiles with local favorite/capability state
 - file and URL context helpers
 - simple queueing when messages are submitted while a response is still running
 - UI controls for sampling and streaming/rendering behavior
@@ -38,7 +40,7 @@ lightweight while still exposing the tools that make desktop chat useful:
 ## Features
 
 - **OpenAI-compatible API support**  
-  Connects to OpenAI-compatible chat completion servers. v1.2 can call public
+  Connects to OpenAI-compatible chat completion servers. The app can call public
   endpoints directly or send a bearer token when a named API key is applied.
 
 - **Named API keys**  
@@ -55,6 +57,12 @@ lightweight while still exposing the tools that make desktop chat useful:
   Loads available models from `/v1/models` and lets you switch models from the
   sidebar.
 
+- **Chat, Character, and Agent modes**  
+  Chat Mode keeps the regular session prompt workflow lightweight. Agent Mode
+  enables the existing terminal command workflow for local coding tasks.
+  Character Mode uses synced character profiles and hides session prompt and
+  tool controls unless the selected character has those capabilities enabled.
+
 - **Low-startup-context sessions**  
   A session prompt can be drafted and saved, then locked into the conversation
   only when the first message is sent.
@@ -62,7 +70,15 @@ lightweight while still exposing the tools that make desktop chat useful:
 - **Terminal agent mode**  
   When enabled, the assistant can request a shell command with a
   `<terminal_command>...</terminal_command>` block. The app runs the command in
-  the configured workspace and feeds the output back to the model.
+  the configured workspace and feeds the output back to the model. Chat Mode
+  never injects terminal instructions; Agent Mode uses the global terminal
+  toggle, and Character Mode only uses terminal access when enabled for that
+  character.
+
+- **Character profiles**  
+  Sync character profiles from a JSON endpoint, select an active character,
+  favorite characters locally, and override file, URL, or terminal capability
+  per character without modifying synced server data.
 
 - **Terminal permission modes**  
   Default permissions allow only configured command names. Full access allows
@@ -197,8 +213,11 @@ custom packaging.
 Important sections:
 
 - `server`: base URL and saved server URL history
+- `active_mode`: current Chat, Character, or Agent mode
 - `api_keys`: saved API key names, storage metadata, and selected key ID
 - `session_prompt`: current prompt and prompt history
+- `character_profiles`: synced character items plus local favorite/capability
+  state
 - `agent_terminal`: terminal enabled state, permission mode, and default command
   allowlist
 - `workspace`: optional terminal command workspace path
