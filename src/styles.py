@@ -12,7 +12,7 @@ ARROW_DOWN_FULL_ACCESS_ICON = ASSETS_DIR / "ic_arrow_down_full_access.svg"
 
 APP_STYLE = """
 QMainWindow {
-    background: #0f1011;
+    background: #08090b;
 }
 QWidget {
     color: #e8eaed;
@@ -92,7 +92,7 @@ QPushButton#modeButton {
     background: transparent;
     border-color: #2a2d30;
     min-height: 22px;
-    padding: 9px 12px;
+    padding: 9px 8px;
 }
 QPushButton#modeButton:hover {
     background: #181a1c;
@@ -240,11 +240,11 @@ QPushButton#inlineLinkButton:hover {
     text-decoration: underline;
 }
 QLabel#statusBadge {
-    background: #17191b;
-    border: 1px solid #2a2d30;
-    border-radius: 999px;
-    padding: 6px 10px;
-    font-size: 10pt;
+    background: #15181b;
+    border: none;
+    border-radius: 9px;
+    padding: 4px 7px;
+    font-size: 8pt;
     font-weight: 600;
 }
 QLabel#sessionPromptBadge {
@@ -272,11 +272,11 @@ QFrame#characterHeroCard:hover {
 }
 
 QLabel#characterHeroAvatar {
-    background: #0f1216;
+    background: transparent;
     color: #9ca3af;
     font-size: 20pt;
     font-weight: 800;
-    border-radius: 18px;
+    border: none;
 }
 
 QFrame#characterHeroInfo {
@@ -367,9 +367,9 @@ QPushButton#inlineLinkButton:hover {
 }
 
 QFrame#accessPanel {
-    background: #101318;
-    border: 1px solid #242a33;
-    border-radius: 16px;
+    background: transparent;
+    border: none;
+    border-radius: 0;
 }
 
 QFrame#accessRow {
@@ -378,13 +378,13 @@ QFrame#accessRow {
 }
 
 QFrame#accessRow:hover {
-    background: #151922;
+    background: rgba(255, 255, 255, 10);
     border-radius: 12px;
 }
 
 QLabel#accessLabel {
     color: #f1f5f9;
-    font-size: 10.5pt;
+    font-size: 8pt;
     font-weight: 700;
 }
 
@@ -565,13 +565,13 @@ QWidget#sidebarScrollBody {
 QPushButton#sidebarMenuButton {
     background: #17191b;
     border: 1px solid #2a2d30;
-    border-radius: 14px;
-    min-width: 44px;
-    max-width: 44px;
-    min-height: 44px;
-    max-height: 44px;
+    border-radius: 12px;
+    min-width: 36px;
+    max-width: 36px;
+    min-height: 36px;
+    max-height: 36px;
     padding: 0;
-    font-size: 18pt;
+    font-size: 15pt;
     font-weight: 700;
     color: #d8dadd;
 }
@@ -582,12 +582,12 @@ QPushButton#sidebarMenuButton:hover {
 QPushButton#pinButton {
     background: #17191b;
     border: 1px solid #2a2d30;
-    border-radius: 14px;
+    border-radius: 12px;
     color: #8c9298;
-    min-width: 44px;
-    max-width: 44px;
-    min-height: 44px;
-    max-height: 44px;
+    min-width: 36px;
+    max-width: 36px;
+    min-height: 36px;
+    max-height: 36px;
     padding: 0;
     font-size: 15pt;
     font-weight: 700;

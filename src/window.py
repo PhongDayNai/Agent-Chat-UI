@@ -1,6 +1,7 @@
 """Main application window."""
 
 import base64
+import html
 import json
 import mimetypes
 import uuid
@@ -84,7 +85,7 @@ from characters import (
 )
 from character_image_cache import CharacterImageCache
 from character_theme import CHARACTER_MODE_STYLE_PATCH
-from character_widgets import CharacterAccessPanel, CharacterPosterCard, CharacterSidebarHeroCard, render_svg_pixmap
+from character_widgets import CharacterAccessPanel, CharacterPosterCard, CharacterSectionFrame, CharacterSidebarHeroCard, SwitchPill, render_svg_pixmap
 from message_builder import build_messages
 from modes import MODE_AGENT, MODE_CHARACTER, MODE_CHAT, MODE_LABELS, normalize_mode
 from styles import APP_STYLE
@@ -120,9 +121,9 @@ SIDEBAR_DROPDOWN_TEXT_INSET = "  "
 SIDEBAR_ELIDE_WIDTH = 320
 COMPACT_LAYOUT_WIDTH = 900
 COMPACT_LAYOUT_HEIGHT = 760
-COMPACT_SIDEBAR_WIDTH = 340
-COMPACT_SIDEBAR_MIN_WIDTH = 300
-COMPACT_WINDOW_GUTTER = 80
+COMPACT_SIDEBAR_WIDTH = 420
+COMPACT_SIDEBAR_MIN_WIDTH = 340
+COMPACT_WINDOW_GUTTER = 0
 CHARACTER_CARD_RATIOS = ("2:3", "3:2", "1:1", "9:16", "16:9")
 DEFAULT_CHARACTER_CARD_RATIO = "2:3"
 CHARACTER_CARD_MIN_WIDTH = 190
@@ -130,6 +131,60 @@ CHARACTER_CARD_MAX_WIDTH = 240
 CHARACTER_CARD_MIN_HEIGHT = 270
 CHARACTER_CARD_MAX_HEIGHT = 350
 CHARACTER_CARD_RADIUS = 20
+
+
+class ClippedSidebarFrame(QFrame):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.clip_radius = 24
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.apply_clip_mask()
+
+    def apply_clip_mask(self):
+        width = self.width()
+        height = self.height()
+        if width <= 0 or height <= 0:
+            return
+        path = QPainterPath()
+        path.addRoundedRect(
+            QRectF(0, 0, width, height),
+            self.clip_radius,
+            self.clip_radius,
+        )
+        self.setMask(QRegion(path.toFillPolygon().toPolygon()))
+
+
+class StatusBadge(QLabel):
+    STATUS_DOT_COLORS = {
+        "connected": "#70d56b",
+        "ready": "#70d56b",
+        "checking": "#c5a85b",
+        "queued": "#c5a85b",
+        "generating": "#c5a85b",
+        "permission needed": "#c5a85b",
+        "no models loaded": "#c5a85b",
+        "disconnected": "#9aa0a6",
+        "dismissed": "#9aa0a6",
+        "stopped": "#9aa0a6",
+        "request failed": "#e16b6b",
+    }
+
+    def __init__(self, text="", parent=None):
+        super().__init__(parent)
+        self.setTextFormat(Qt.TextFormat.RichText)
+        if text:
+            self.setText(text)
+
+    def setText(self, text):
+        label = str(text)
+        dot_color = self.STATUS_DOT_COLORS.get(label.lower(), "#9aa0a6")
+        safe_label = html.escape(label)
+        super().setText(
+            f"<span style='color:{dot_color};'>●</span>"
+            f"<span style='color:#c8cdd2;'>&nbsp;{safe_label}</span>"
+        )
 
 
 class CharacterChoiceCard(QFrame):
@@ -376,6 +431,9 @@ class AgentChatWindow(QMainWindow):
         self.api_key_editing = False
         self.advanced_expanded = True
         self.advanced_body_animation = None
+        self.composer_expanded = True
+        self.composer_body_animation = None
+        self.auto_scrollbar_timers = {}
         self.sidebar_pinned = self.pin_panel
         self.sidebar_open = False
         self.sidebar_collapsed_width = 68
@@ -915,8 +973,7 @@ class AgentChatWindow(QMainWindow):
             self.sidebar_actions_layout.setDirection(direction)
             self.sidebar_actions_layout.setSpacing(8 if compact else 10)
         if hasattr(self, "advanced_panel"):
-            margins = (12, 14, 12, 14) if compact else (16, 18, 16, 18)
-            self.advanced_panel.layout().setContentsMargins(*margins)
+            self.advanced_panel.layout().setContentsMargins(0, 0, 0, 0)
         if hasattr(self, "sidebar_content"):
             self.sidebar_content.layout().setSpacing(12 if compact else 16)
         self.update_model_selector_text()
@@ -943,9 +1000,11 @@ class AgentChatWindow(QMainWindow):
         self.scroll_area = QScrollArea()
         self.scroll_area.setWidgetResizable(True)
         self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.scroll_area.setMinimumWidth(0)
         self.scroll_area.viewport().installEventFilter(self)
         self.scroll_area.verticalScrollBar().installEventFilter(self)
+        self.setup_auto_hide_scrollbar(self.scroll_area)
         content_layout.addWidget(self.scroll_area)
         self.scroll_area.verticalScrollBar().valueChanged.connect(self.update_sticky_code_header)
 
@@ -1210,7 +1269,7 @@ class AgentChatWindow(QMainWindow):
         self.select_character(character_id)
 
     def build_sidebar(self):
-        frame = QFrame()
+        frame = ClippedSidebarFrame()
         frame.setObjectName("sidebar")
         frame.setMinimumWidth(self.sidebar_collapsed_width)
         frame.setMaximumWidth(self.sidebar_collapsed_width)
@@ -1219,7 +1278,7 @@ class AgentChatWindow(QMainWindow):
         frame.leaveEvent = self.sidebar_leave_event
 
         layout = QVBoxLayout(frame)
-        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setContentsMargins(12, 16, 12, 0)
         layout.setSpacing(12)
         layout.setAlignment(Qt.AlignmentFlag.AlignTop)
 
@@ -1245,7 +1304,7 @@ class AgentChatWindow(QMainWindow):
         header_row.addWidget(self.pin_button, 0, Qt.AlignmentFlag.AlignLeft)
         header_row.addStretch()
 
-        self.status_badge = QLabel("Checking")
+        self.status_badge = StatusBadge("Checking")
         self.status_badge.setObjectName("statusBadge")
         header_row.addWidget(self.status_badge, 0, Qt.AlignmentFlag.AlignRight)
         layout.addLayout(header_row)
@@ -1254,15 +1313,18 @@ class AgentChatWindow(QMainWindow):
         self.sidebar_scroll.setObjectName("sidebarScroll")
         self.sidebar_scroll.setWidgetResizable(True)
         self.sidebar_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.sidebar_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.sidebar_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.sidebar_scroll.setFrameShape(QFrame.Shape.NoFrame)
         self.sidebar_scroll.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.sidebar_scroll.viewport().installEventFilter(self)
+        self.sidebar_scroll.verticalScrollBar().installEventFilter(self)
+        self.setup_auto_hide_scrollbar(self.sidebar_scroll)
 
         self.sidebar_content = QWidget()
         self.sidebar_content.setObjectName("sidebarScrollBody")
         self.sidebar_content.setMinimumWidth(0)
         content_layout = QVBoxLayout(self.sidebar_content)
-        content_layout.setContentsMargins(0, 0, 12, 0)
+        content_layout.setContentsMargins(0, 0, 4, 0)
         content_layout.setSpacing(16)
 
         title = QLabel("Agent Chat")
@@ -1321,7 +1383,7 @@ class AgentChatWindow(QMainWindow):
 
         self.advanced_panel = self.build_advanced_panel()
         content_layout.addWidget(self.advanced_panel)
-        content_layout.addStretch()
+        content_layout.addSpacing(16)
 
         self.sidebar_scroll.setWidget(self.sidebar_content)
         layout.addWidget(self.sidebar_scroll, 1)
@@ -1343,11 +1405,11 @@ class AgentChatWindow(QMainWindow):
         frame.setObjectName("panel")
         frame.setMinimumWidth(0)
         layout = QVBoxLayout(frame)
-        layout.setContentsMargins(16, 18, 16, 18)
+        layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(16)
 
         advanced_header_row = QHBoxLayout()
-        advanced_header_row.setContentsMargins(0, 0, 0, 0)
+        advanced_header_row.setContentsMargins(16, 18, 16, 0)
         advanced_header_row.setSpacing(8)
         self.advanced_heading = QLabel("Advanced controls")
         self.advanced_heading.setObjectName("sectionLabel")
@@ -1363,7 +1425,7 @@ class AgentChatWindow(QMainWindow):
 
         self.advanced_body = QWidget()
         advanced_body_layout = QVBoxLayout(self.advanced_body)
-        advanced_body_layout.setContentsMargins(0, 0, 0, 0)
+        advanced_body_layout.setContentsMargins(16, 0, 16, 0)
         advanced_body_layout.setSpacing(16)
 
         self.server_section = QWidget()
@@ -1499,9 +1561,9 @@ class AgentChatWindow(QMainWindow):
         layout.addWidget(self.advanced_body)
         self.set_advanced_panel_expanded(self.advanced_expanded, animate=False)
 
-        self.character_section = QWidget()
+        self.character_section = CharacterSectionFrame()
         character_section_layout = QVBoxLayout(self.character_section)
-        character_section_layout.setContentsMargins(0, 0, 0, 0)
+        character_section_layout.setContentsMargins(16, 8, 16, 10)
         character_section_layout.setSpacing(10)
 
         character_heading = QLabel("Character")
@@ -1699,14 +1761,30 @@ class AgentChatWindow(QMainWindow):
         self.session_prompt_section.setVisible(self.session_prompt_enabled)
         layout.addWidget(self.session_prompt_section)
 
-        composer_section = QWidget()
-        composer_section_layout = QVBoxLayout(composer_section)
-        composer_section_layout.setContentsMargins(0, 0, 0, 0)
+        self.composer_section = QWidget()
+        composer_section_layout = QVBoxLayout(self.composer_section)
+        composer_section_layout.setContentsMargins(16, 0, 16, 0)
         composer_section_layout.setSpacing(10)
 
+        composer_header_row = QHBoxLayout()
+        composer_header_row.setContentsMargins(0, 0, 0, 0)
+        composer_header_row.setSpacing(8)
         composer_heading = QLabel("Composer")
         composer_heading.setObjectName("sectionLabel")
-        composer_section_layout.addWidget(composer_heading)
+        composer_header_row.addWidget(composer_heading)
+        composer_header_row.addStretch()
+        self.composer_collapse_button = QPushButton("")
+        self.composer_collapse_button.setObjectName("advancedCollapseButton")
+        self.composer_collapse_button.setIconSize(QSize(16, 16))
+        self.composer_collapse_button.setToolTip("Collapse composer controls")
+        self.composer_collapse_button.clicked.connect(self.toggle_composer_panel)
+        composer_header_row.addWidget(self.composer_collapse_button)
+        composer_section_layout.addLayout(composer_header_row)
+
+        self.composer_body = QWidget()
+        composer_body_layout = QVBoxLayout(self.composer_body)
+        composer_body_layout.setContentsMargins(0, 0, 0, 0)
+        composer_body_layout.setSpacing(10)
 
         composer_layout = QFormLayout()
         composer_layout.setSpacing(12)
@@ -1718,22 +1796,21 @@ class AgentChatWindow(QMainWindow):
         self.composer_max_lines_spin.setValue(self.composer_max_lines)
         self.composer_max_lines_spin.valueChanged.connect(self.set_composer_max_lines)
         composer_layout.addRow("Max height", self.composer_max_lines_spin)
-        composer_section_layout.addLayout(composer_layout)
-        layout.addWidget(composer_section)
-
-        thinking_row = QHBoxLayout()
-        thinking_row.setSpacing(10)
+        composer_body_layout.addLayout(composer_layout)
 
         thinking_label = QLabel("Reasoning")
         thinking_label.setObjectName("sectionLabel")
-        thinking_row.addWidget(thinking_label)
-
-        self.show_thinking_checkbox = QCheckBox("Show thinking")
+        composer_body_layout.addWidget(thinking_label)
+        thinking_row = QHBoxLayout()
+        thinking_row.setContentsMargins(0, 0, 0, 0)
+        thinking_row.setSpacing(10)
+        thinking_row.addWidget(QLabel("Show thinking"), 0, Qt.AlignmentFlag.AlignVCenter)
+        thinking_row.addStretch()
+        self.show_thinking_checkbox = SwitchPill(self.show_thinking)
         self.show_thinking_checkbox.setChecked(self.show_thinking)
         self.show_thinking_checkbox.toggled.connect(self.update_thinking_visibility)
-        thinking_row.addWidget(self.show_thinking_checkbox)
-        thinking_row.addStretch()
-        layout.addLayout(thinking_row)
+        thinking_row.addWidget(self.show_thinking_checkbox, 0, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        composer_body_layout.addLayout(thinking_row)
 
         self.assistant_rendering_section = QWidget()
         rendering_section_layout = QVBoxLayout(self.assistant_rendering_section)
@@ -1745,12 +1822,10 @@ class AgentChatWindow(QMainWindow):
         rendering_section_layout.addWidget(rendering_heading)
 
         debounce_row = QHBoxLayout()
+        debounce_row.setContentsMargins(0, 0, 0, 0)
         debounce_row.setSpacing(10)
 
-        self.debounce_checkbox = QCheckBox("Debounce streaming")
-        self.debounce_checkbox.setChecked(self.assistant_debounce_enabled)
-        self.debounce_checkbox.toggled.connect(self.set_assistant_debounce_enabled)
-        debounce_row.addWidget(self.debounce_checkbox)
+        debounce_row.addWidget(QLabel("Debounce streaming"), 1, Qt.AlignmentFlag.AlignVCenter)
 
         self.debounce_interval_spin = QSpinBox()
         self.debounce_interval_spin.setRange(0, 1000)
@@ -1758,10 +1833,18 @@ class AgentChatWindow(QMainWindow):
         self.debounce_interval_spin.setValue(self.assistant_debounce_interval_ms)
         self.debounce_interval_spin.valueChanged.connect(self.set_assistant_debounce_interval)
         debounce_row.addWidget(self.debounce_interval_spin)
-        debounce_row.addStretch()
+
+        self.debounce_checkbox = SwitchPill(self.assistant_debounce_enabled)
+        self.debounce_checkbox.setChecked(self.assistant_debounce_enabled)
+        self.debounce_checkbox.toggled.connect(self.set_assistant_debounce_enabled)
+        debounce_row.addWidget(self.debounce_checkbox, 0, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+
         rendering_section_layout.addLayout(debounce_row)
         self.assistant_rendering_section.setVisible(self.assistant_rendering_enabled)
-        layout.addWidget(self.assistant_rendering_section)
+        composer_body_layout.addWidget(self.assistant_rendering_section)
+        composer_section_layout.addWidget(self.composer_body)
+        self.set_composer_panel_expanded(self.composer_expanded, animate=False)
+        layout.addWidget(self.composer_section)
 
         self.agent_terminal_section = QWidget()
         terminal_section_layout = QVBoxLayout(self.agent_terminal_section)
@@ -1775,11 +1858,12 @@ class AgentChatWindow(QMainWindow):
         terminal_label.setObjectName("sectionLabel")
         terminal_row.addWidget(terminal_label)
 
-        self.agent_terminal_checkbox = QCheckBox("Terminal access")
+        self.agent_terminal_toggle_label = QLabel("Terminal access")
+        terminal_row.addWidget(self.agent_terminal_toggle_label, 1, Qt.AlignmentFlag.AlignVCenter)
+        self.agent_terminal_checkbox = SwitchPill(self.agent_terminal_enabled)
         self.agent_terminal_checkbox.setChecked(self.agent_terminal_enabled)
         self.agent_terminal_checkbox.toggled.connect(self.set_agent_terminal_enabled)
-        terminal_row.addWidget(self.agent_terminal_checkbox)
-        terminal_row.addStretch()
+        terminal_row.addWidget(self.agent_terminal_checkbox, 0, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         terminal_section_layout.addLayout(terminal_row)
 
         self.side_terminal_permission_button = QPushButton("")
@@ -2146,6 +2230,8 @@ class AgentChatWindow(QMainWindow):
             self.agent_terminal_section.setVisible(tools_visible)
         if hasattr(self, "agent_terminal_checkbox"):
             self.agent_terminal_checkbox.setVisible(is_agent)
+        if hasattr(self, "agent_terminal_toggle_label"):
+            self.agent_terminal_toggle_label.setVisible(is_agent)
         if hasattr(self, "side_terminal_permission_button"):
             self.side_terminal_permission_button.setEnabled(effective_terminal_enabled)
         if hasattr(self, "terminal_permission_button"):
@@ -3417,6 +3503,90 @@ class AgentChatWindow(QMainWindow):
             self.advanced_body.hide()
             self.advanced_body.setMaximumHeight(16777215)
 
+    def setup_auto_hide_scrollbar(self, scroll_area):
+        scrollbar = scroll_area.verticalScrollBar()
+        timer = QTimer(self)
+        timer.setSingleShot(True)
+        timer.setInterval(850)
+        timer.timeout.connect(lambda area=scroll_area: self.hide_auto_scrollbar(area))
+        self.auto_scrollbar_timers[scroll_area] = timer
+        scrollbar.valueChanged.connect(lambda _value, area=scroll_area: self.show_auto_scrollbar(area))
+
+    def show_auto_scrollbar(self, scroll_area):
+        scrollbar = scroll_area.verticalScrollBar()
+        if scrollbar.maximum() <= 0:
+            scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            return
+        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        timer = self.auto_scrollbar_timers.get(scroll_area)
+        if timer is not None:
+            timer.start()
+
+    def hide_auto_scrollbar(self, scroll_area):
+        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+
+    def toggle_composer_panel(self):
+        self.set_composer_panel_expanded(not self.composer_expanded)
+
+    def set_composer_panel_expanded(self, expanded, animate=True):
+        expanded = bool(expanded)
+        if self.composer_expanded == expanded:
+            self.update_composer_collapse_icon()
+            return
+        self.composer_expanded = expanded
+        if hasattr(self, "composer_body"):
+            if animate:
+                self.animate_composer_body(expanded)
+            else:
+                self.composer_body.setVisible(expanded)
+                self.composer_body.setMaximumHeight(16777215)
+        self.update_composer_collapse_icon()
+
+    def update_composer_collapse_icon(self):
+        if hasattr(self, "composer_collapse_button"):
+            pixmap = render_svg_pixmap(ARROW_DOWN_ICON_PATH, QSize(16, 16), "#8c9298")
+            if self.composer_expanded:
+                pixmap = pixmap.transformed(
+                    QTransform().rotate(180),
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+            self.composer_collapse_button.setIcon(QIcon(pixmap))
+            self.composer_collapse_button.setToolTip(
+                "Collapse composer controls" if self.composer_expanded else "Expand composer controls"
+            )
+
+    def animate_composer_body(self, expanded):
+        if not hasattr(self, "composer_body"):
+            return
+        if self.composer_body_animation is not None:
+            self.composer_body_animation.stop()
+        if expanded:
+            self.composer_body.show()
+            self.composer_body.setMaximumHeight(0)
+            start_height = 0
+            end_height = max(1, self.composer_body.sizeHint().height())
+        else:
+            start_height = max(1, self.composer_body.height())
+            end_height = 0
+        self.composer_body_animation = QPropertyAnimation(self.composer_body, b"maximumHeight", self)
+        self.composer_body_animation.setDuration(220)
+        self.composer_body_animation.setEasingCurve(QEasingCurve.Type.InOutCubic)
+        self.composer_body_animation.setStartValue(start_height)
+        self.composer_body_animation.setEndValue(end_height)
+        self.composer_body_animation.finished.connect(
+            lambda expanded=expanded: self.finish_composer_body_animation(expanded)
+        )
+        self.composer_body_animation.start()
+
+    def finish_composer_body_animation(self, expanded):
+        if not hasattr(self, "composer_body"):
+            return
+        if expanded:
+            self.composer_body.setMaximumHeight(16777215)
+        else:
+            self.composer_body.hide()
+            self.composer_body.setMaximumHeight(16777215)
+
     def edit_connection_settings(self):
         self.server_url_editing = True
         self.api_key_editing = True
@@ -4398,6 +4568,18 @@ class AgentChatWindow(QMainWindow):
             QEvent.Type.Show,
         ):
             QTimer.singleShot(0, self.update_sticky_code_header)
+        for scroll_area in tuple(getattr(self, "auto_scrollbar_timers", {}).keys()):
+            if watched in (scroll_area.viewport(), scroll_area.verticalScrollBar()):
+                if event.type() in (
+                    QEvent.Type.Wheel,
+                    QEvent.Type.MouseButtonPress,
+                    QEvent.Type.MouseMove,
+                    QEvent.Type.MouseButtonRelease,
+                    QEvent.Type.KeyPress,
+                ):
+                    self.show_auto_scrollbar(scroll_area)
+                elif event.type() in (QEvent.Type.Resize, QEvent.Type.Show):
+                    QTimer.singleShot(0, lambda area=scroll_area: self.hide_auto_scrollbar(area))
         if (
             hasattr(self, "character_hero_card")
             and watched == self.character_hero_card

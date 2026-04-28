@@ -7,30 +7,21 @@ Append this to APP_STYLE in window.py:
 
 CHARACTER_MODE_STYLE_PATCH = """
 QMainWindow {
-    background: qlineargradient(
-        x1:0, y1:0, x2:1, y2:1,
-        stop:0 #05070b,
-        stop:0.5 #080d14,
-        stop:1 #0b1018
-    );
+    background: #070807;
 }
 
 QFrame#surface[mode="character"] {
-    background: qlineargradient(
-        x1:0, y1:0, x2:1, y2:1,
-        stop:0 #0b1018,
-        stop:1 #090d14
-    );
-    border-color: #1f2a3d;
+    background: rgb(15, 20, 17);
+    border-color: #25332b;
 }
 
 QFrame#sidebar[mode="character"] {
-    background: qlineargradient(
-        x1:0, y1:0, x2:1, y2:1,
-        stop:0 #111827,
-        stop:1 #0b1018
-    );
-    border-color: #1f2a3d;
+    background: rgb(15, 20, 17);
+    border-color: #25332b;
+}
+
+QFrame#sidebar[mode="character"] QWidget#sidebarScrollBody {
+    background: transparent;
 }
 
 QFrame#sidebar[mode="character"] QPushButton#modeButton:checked {
@@ -41,8 +32,8 @@ QFrame#sidebar[mode="character"] QPushButton#modeButton:checked {
 }
 
 QFrame#composerCanvas[mode="character"] {
-    background: #0b1018;
-    border: 1px solid #1f2a3d;
+    background: rgb(15, 20, 17);
+    border: 1px solid #25332b;
     border-radius: 24px;
 }
 
@@ -133,8 +124,8 @@ QScrollArea#characterOverlayScroll {
 }
 
 QPushButton#characterChangeButton {
-    background: rgba(15, 23, 42, 155);
-    border: 1px solid #334155;
+    background: rgba(24, 30, 27, 190);
+    border: 1px solid #35423a;
     border-radius: 14px;
     color: #f8fafc;
     padding: 10px 14px;
@@ -143,19 +134,15 @@ QPushButton#characterChangeButton {
 }
 
 QPushButton#characterChangeButton:hover {
-    background: rgba(30, 41, 59, 215);
-    border-color: #7c6cff;
+    background: rgba(31, 40, 35, 230);
+    border-color: #586a5f;
     color: #ffffff;
 }
 
 QFrame#accessPanel {
-    background: qlineargradient(
-        x1:0, y1:0, x2:1, y2:1,
-        stop:0 #111827,
-        stop:1 #0f172a
-    );
-    border: 1px solid #273244;
-    border-radius: 18px;
+    background: transparent;
+    border: none;
+    border-radius: 0;
 }
 
 QFrame#accessRow {
@@ -165,24 +152,19 @@ QFrame#accessRow {
 }
 
 QFrame#accessRow:hover {
-    background: rgba(124, 108, 255, 24);
+    background: rgba(255, 255, 255, 10);
 }
 
 QLabel#accessIcon {
-    color: #c4b5fd;
+    color: #8c9298;
     font-size: 13pt;
     font-weight: 800;
 }
 
 QLabel#accessLabel {
     color: #f1f5f9;
-    font-size: 10.5pt;
+    font-size: 8pt;
     font-weight: 800;
-}
-
-QLabel#accessDescription {
-    color: #8b98aa;
-    font-size: 9.2pt;
 }
 
 QFrame#personalityCard,

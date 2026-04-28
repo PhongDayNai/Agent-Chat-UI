@@ -63,6 +63,83 @@ def draw_svg_icon(painter: QPainter, path, rect: QRectF, color: str, fill_color:
         renderer.render(painter, rect)
 
 
+class CharacterSectionFrame(QFrame):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("characterSection")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        rect = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+        radius = 12.0
+        path = QPainterPath()
+        path.addRoundedRect(rect, radius, radius)
+
+        painter.save()
+        painter.setClipPath(path)
+
+        fade_stop = 1.0 / 8.0
+        bg = QLinearGradient(
+            QPointF(rect.left(), rect.top()),
+            QPointF(rect.right(), rect.top()),
+        )
+        bg.setColorAt(0.0, QColor(53, 52, 114, 77))
+        bg.setColorAt(1.0, QColor(53, 52, 114, 26))
+
+        fade = QLinearGradient(
+            QPointF(rect.left(), rect.top()),
+            QPointF(rect.left(), rect.bottom()),
+        )
+        fade.setColorAt(0.0, QColor(255, 255, 255, 255))
+        fade.setColorAt(fade_stop, QColor(255, 255, 255, 85))
+        fade.setColorAt(min(1.0, fade_stop * 2.0), QColor(255, 255, 255, 0))
+        fade.setColorAt(1.0, QColor(255, 255, 255, 0))
+
+        bg_pixmap = QPixmap(rect.size().toSize())
+        bg_pixmap.fill(Qt.GlobalColor.transparent)
+        bg_painter = QPainter(bg_pixmap)
+        bg_painter.fillRect(bg_pixmap.rect(), bg)
+        bg_painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_DestinationIn)
+        bg_painter.fillRect(bg_pixmap.rect(), fade)
+        bg_painter.end()
+        painter.drawPixmap(rect.topLeft(), bg_pixmap)
+
+        border_length = min(50.0, rect.width(), rect.height())
+        border_color = QColor(53, 52, 114)
+        transparent = QColor(53, 52, 114, 0)
+
+        top_border = QLinearGradient(
+            QPointF(rect.left(), rect.top()),
+            QPointF(rect.left() + border_length, rect.top()),
+        )
+        top_border.setColorAt(0.0, border_color)
+        top_border.setColorAt(1.0, transparent)
+        painter.setPen(QPen(top_border, 1.4))
+        painter.drawLine(
+            QPointF(rect.left() + radius, rect.top()),
+            QPointF(rect.left() + border_length, rect.top()),
+        )
+
+        left_border = QLinearGradient(
+            QPointF(rect.left(), rect.top()),
+            QPointF(rect.left(), rect.top() + border_length),
+        )
+        left_border.setColorAt(0.0, border_color)
+        left_border.setColorAt(1.0, transparent)
+        painter.setPen(QPen(left_border, 1.4))
+        painter.drawLine(
+            QPointF(rect.left(), rect.top() + radius),
+            QPointF(rect.left(), rect.top() + border_length),
+        )
+
+        painter.setPen(QPen(border_color, 1.4))
+        painter.drawArc(QRectF(rect.left(), rect.top(), radius * 2, radius * 2), 180 * 16, -90 * 16)
+        painter.restore()
+
+
 def cover_crop_pixmap(pixmap: QPixmap, target_size: QSize, focus_y: float = 0.42) -> QPixmap:
     if pixmap.isNull() or target_size.width() <= 0 or target_size.height() <= 0:
         return QPixmap()
@@ -97,7 +174,7 @@ class SwitchPill(QWidget):
     def __init__(self, checked: bool = False, parent=None):
         super().__init__(parent)
         self._checked = bool(checked)
-        self.setFixedSize(44, 24)
+        self.setFixedSize(32, 18)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
@@ -130,17 +207,17 @@ class SwitchPill(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         rect = self.rect().adjusted(1, 1, -1, -1)
-        track_color = QColor("#7c6cff") if self._checked else QColor("#111827")
-        border_color = QColor("#7c6cff") if self._checked else QColor("#3b4658")
+        track_color = QColor("#f2f3f5") if self._checked else QColor("#111315")
+        border_color = QColor("#f2f3f5") if self._checked else QColor("#3a3f44")
         painter.setPen(QPen(border_color, 1))
         painter.setBrush(track_color)
-        painter.drawRoundedRect(QRectF(rect), 12, 12)
+        painter.drawRoundedRect(QRectF(rect), 9, 9)
 
-        knob_size = 18
+        knob_size = 12
         x = rect.right() - knob_size - 2 if self._checked else rect.left() + 2
         knob_rect = QRect(x, rect.top() + 2, knob_size, knob_size)
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor("#ffffff") if self._checked else QColor("#94a3b8"))
+        painter.setBrush(QColor("#111315") if self._checked else QColor("#8c9298"))
         painter.drawEllipse(knob_rect)
 
 
@@ -449,6 +526,11 @@ class CharacterSidebarHeroCard(CharacterPosterCard):
         bloom.setColorAt(1.0, QColor(255, 255, 255, 0))
         painter.fillRect(rect, bloom)
 
+    def paint_avatar_fallback(self, painter, rect):
+        if self.pixmap.isNull():
+            return
+        painter.drawPixmap(rect, cover_crop_pixmap(self.pixmap, rect.size(), focus_y=0.42))
+
     def paint_selected_badge(self, painter, rect):
         fav = self.favorite_rect()
         painter.setBrush(QColor(8, 12, 20, 176))
@@ -509,34 +591,32 @@ class CharacterAccessRow(QFrame):
         super().__init__(parent)
         self.key = key
         self.setObjectName("accessRow")
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setToolTip(description)
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(12, 10, 12, 10)
+        layout.setContentsMargins(12, 8, 12, 8)
         layout.setSpacing(10)
 
         icon_label = QLabel("")
         icon_label.setObjectName("accessIcon")
         icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         icon_label.setFixedWidth(24)
-        icon_label.setPixmap(render_svg_pixmap(icon_path, QSize(18, 18), "#c4b5fd"))
+        icon_label.setPixmap(render_svg_pixmap(icon_path, QSize(18, 18), "#8c9298"))
+        icon_label.setToolTip(description)
 
         text_col = QVBoxLayout()
-        text_col.setSpacing(2)
+        text_col.setSpacing(0)
         text_col.setContentsMargins(0, 0, 0, 0)
 
         title_label = QLabel(title)
         title_label.setObjectName("accessLabel")
-
-        desc_label = QLabel(description)
-        desc_label.setObjectName("accessDescription")
-        desc_label.setWordWrap(True)
+        title_label.setToolTip(description)
 
         text_col.addWidget(title_label)
-        text_col.addWidget(desc_label)
 
         self.switch = SwitchPill(enabled)
         self.switch.toggled.connect(lambda value: self.toggled.emit(self.key, value))
+        self.switch.setToolTip(description)
 
         layout.addWidget(icon_label)
         layout.addLayout(text_col, 1)
@@ -544,12 +624,6 @@ class CharacterAccessRow(QFrame):
 
     def set_checked(self, value: bool):
         self.switch.setChecked(value)
-
-    def mousePressEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton:
-            self.switch.setChecked(not self.switch.isChecked())
-            self.toggled.emit(self.key, self.switch.isChecked())
-        super().mousePressEvent(event)
 
 
 class CharacterAccessPanel(QFrame):
@@ -568,8 +642,8 @@ class CharacterAccessPanel(QFrame):
         self.rows: dict[str, CharacterAccessRow] = {}
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(4)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(2)
 
         capabilities = capabilities or {}
 
