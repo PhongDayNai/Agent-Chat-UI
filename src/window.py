@@ -361,6 +361,9 @@ class AgentChatWindow(QMainWindow):
         self.assistant_reply_focus_active = False
         self.assistant_reply_focus_card = None
         self.selected_model_name = ""
+        self.server_connected = False
+        self.server_url_editing = False
+        self.api_key_editing = False
         self.advanced_expanded = False
         self.sidebar_pinned = self.pin_panel
         self.sidebar_open = False
@@ -1193,6 +1196,10 @@ class AgentChatWindow(QMainWindow):
         self.pin_button.hide()
         header_row.addWidget(self.pin_button, 0, Qt.AlignmentFlag.AlignLeft)
         header_row.addStretch()
+
+        self.status_badge = QLabel("Checking")
+        self.status_badge.setObjectName("statusBadge")
+        header_row.addWidget(self.status_badge, 0, Qt.AlignmentFlag.AlignRight)
         layout.addLayout(header_row)
 
         self.sidebar_scroll = QScrollArea()
@@ -1214,19 +1221,8 @@ class AgentChatWindow(QMainWindow):
         title.setObjectName("titleLabel")
         content_layout.addWidget(title)
 
-        subtitle = QLabel("Choose a mode, model, and only the settings that apply.")
-        subtitle.setObjectName("subtleLabel")
-        subtitle.setWordWrap(True)
-        content_layout.addWidget(subtitle)
-
-        self.status_badge = QLabel("Checking server…")
-        self.status_badge.setObjectName("statusBadge")
-        content_layout.addWidget(self.status_badge)
-
-        self.status_detail = QLabel("")
-        self.status_detail.setObjectName("subtleLabel")
-        self.status_detail.setWordWrap(True)
-        content_layout.addWidget(self.status_detail)
+        self.status_detail = QLabel("", frame)
+        self.status_detail.hide()
 
         mode_heading = QLabel("Mode")
         mode_heading.setObjectName("sectionLabel")
@@ -1305,6 +1301,24 @@ class AgentChatWindow(QMainWindow):
         heading = QLabel("Advanced controls")
         heading.setObjectName("sectionLabel")
         layout.addWidget(heading)
+
+        self.connection_compact_section = QWidget()
+        connection_compact_layout = QHBoxLayout(self.connection_compact_section)
+        connection_compact_layout.setContentsMargins(0, 0, 0, 0)
+        connection_compact_layout.setSpacing(8)
+        connection_heading = QLabel("Connection")
+        connection_heading.setObjectName("sectionLabel")
+        connection_compact_layout.addWidget(connection_heading)
+        self.connection_compact_label = QLabel("")
+        self.connection_compact_label.setObjectName("characterMeta")
+        self.connection_compact_label.setMinimumWidth(0)
+        self.connection_compact_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+        connection_compact_layout.addWidget(self.connection_compact_label, 1)
+        self.connection_edit_button = QPushButton("Edit")
+        self.connection_edit_button.setObjectName("inlineLinkButton")
+        self.connection_edit_button.clicked.connect(self.edit_connection_settings)
+        connection_compact_layout.addWidget(self.connection_edit_button)
+        layout.addWidget(self.connection_compact_section)
 
         self.server_section = QWidget()
         server_section_layout = QVBoxLayout(self.server_section)
@@ -3000,13 +3014,16 @@ class AgentChatWindow(QMainWindow):
         self.position_toast()
         self.position_character_overlay()
         self.position_character_hero_elements()
+        self.refresh_connection_settings_ui()
 
     def refresh_server_state(self):
-        self.status_badge.setText("Checking OpenAI-compatible server…")
+        self.status_badge.setText("Checking")
         self.status_detail.setText(f"Refreshing server state from {self.base_url}.")
         self.model_selector.setEnabled(False)
         self.refresh_button.setEnabled(False)
         self.apply_url_button.setEnabled(False)
+        self.server_connected = False
+        self.refresh_connection_settings_ui()
 
         try:
             health_url = self.build_server_url("/health")
@@ -3028,6 +3045,9 @@ class AgentChatWindow(QMainWindow):
             self.populate_models(models)
 
             if models:
+                self.server_connected = True
+                self.server_url_editing = False
+                self.api_key_editing = False
                 self.status_badge.setText("Connected")
                 self.status_detail.setText(f"{len(models)} model(s) available from {self.base_url}.")
             else:
@@ -3040,6 +3060,8 @@ class AgentChatWindow(QMainWindow):
         finally:
             self.refresh_button.setEnabled(True)
             self.update_base_url_input_state()
+            self.refresh_api_key_ui()
+            self.refresh_connection_settings_ui()
             self.update_send_availability()
 
     def populate_models(self, models):
@@ -3054,11 +3076,13 @@ class AgentChatWindow(QMainWindow):
         self.model_selector.setEnabled(bool(models))
 
     def set_disconnected_state(self, detail):
+        self.server_connected = False
         self.available_models = []
         self.set_selected_model_name("")
         self.model_selector.setEnabled(False)
         self.status_badge.setText("Disconnected")
         self.status_detail.setText(detail)
+        self.refresh_connection_settings_ui()
 
     def current_model_name(self):
         return self.selected_model_name.strip()
@@ -3185,6 +3209,49 @@ class AgentChatWindow(QMainWindow):
             self.new_api_key_button.setText("Hide new key" if self.new_api_key_panel_expanded else "New key")
         if hasattr(self, "api_keys_section"):
             self.api_keys_section.setVisible(self.api_keys_enabled)
+        self.refresh_connection_settings_ui()
+
+    def refresh_connection_settings_ui(self):
+        if hasattr(self, "base_url_input"):
+            url_current = self.normalize_base_url(self.base_url_input.currentText())
+        else:
+            url_current = self.base_url
+        url_applied = bool(url_current) and url_current == self.base_url
+        api_applied = self.pending_api_key_id == self.selected_api_key_id
+        connection_collapsed = (
+            self.server_connected
+            and url_applied
+            and api_applied
+            and not self.server_url_editing
+            and not self.api_key_editing
+        )
+        if hasattr(self, "connection_compact_section"):
+            self.connection_compact_section.setVisible(connection_collapsed)
+        if hasattr(self, "connection_compact_label"):
+            current_key = self.current_api_key_item()
+            key_label = current_key.get("name", "") if current_key else "No API key"
+            label_width = self.connection_compact_label.width()
+            if label_width <= 0 and hasattr(self, "advanced_panel"):
+                label_width = max(80, self.advanced_panel.width() - 170)
+            self.set_elided_label_text(
+                self.connection_compact_label,
+                f"{self.base_url} · {key_label}",
+                max(80, label_width),
+            )
+        if hasattr(self, "server_section"):
+            self.server_section.setVisible(self.server_enabled and not connection_collapsed)
+        if hasattr(self, "api_keys_section"):
+            self.api_keys_section.setVisible(self.api_keys_enabled and not connection_collapsed)
+        if hasattr(self, "new_api_key_panel") and connection_collapsed:
+            self.new_api_key_panel_expanded = False
+            self.new_api_key_panel.hide()
+
+    def edit_connection_settings(self):
+        self.server_url_editing = True
+        self.api_key_editing = True
+        self.refresh_api_key_ui()
+        if hasattr(self, "base_url_input"):
+            self.base_url_input.setFocus()
 
     def api_key_detail_text(self, item, applied):
         action_text = "Applied to requests." if applied else "Press ✓ to apply this selection to requests."
