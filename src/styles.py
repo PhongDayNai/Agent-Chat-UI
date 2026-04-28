@@ -261,6 +261,12 @@ QPushButton#heroIconButton {
 QPushButton#heroIconButton:hover {
     background: rgba(242, 243, 245, 35);
 }
+QPushButton#heroIconButton[favorite="true"] {
+    color: #f5c84c;
+}
+QPushButton#heroIconButton[favorite="true"]:hover {
+    background: rgba(245, 200, 76, 45);
+}
 QLabel#characterHeroAvatar {
     background: #101214;
     color: #8c9298;

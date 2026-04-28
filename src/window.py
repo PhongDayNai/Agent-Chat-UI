@@ -1467,21 +1467,9 @@ class AgentChatWindow(QMainWindow):
         self.sync_characters_button.clicked.connect(self.sync_characters)
         character_source_row.addWidget(self.sync_characters_button)
         character_source_panel_layout.addLayout(character_source_row)
-        character_section_layout.addWidget(self.character_source_panel)
-
-        character_picker_row = QHBoxLayout()
-        character_picker_row.setSpacing(8)
-        self.character_picker_button = QPushButton("Change character")
-        self.character_picker_button.setObjectName("ghostButton")
-        self.character_picker_button.clicked.connect(self.show_character_menu)
-        character_picker_row.addWidget(self.character_picker_button, 1)
-
-        self.character_favorite_button = QPushButton("☆")
-        self.character_favorite_button.setObjectName("fieldIconButton")
-        self.character_favorite_button.setToolTip("Favorite character")
-        self.character_favorite_button.clicked.connect(self.toggle_active_character_favorite)
-        character_picker_row.addWidget(self.character_favorite_button)
-        character_section_layout.addLayout(character_picker_row)
+        self.character_sync_label = QLabel("")
+        self.character_sync_label.setObjectName("characterMeta")
+        character_source_panel_layout.addWidget(self.character_sync_label)
 
         self.character_hero_card = QFrame()
         self.character_hero_card.setObjectName("characterHeroCard")
@@ -1495,12 +1483,8 @@ class AgentChatWindow(QMainWindow):
         self.character_hero_favorite_button = QPushButton("☆")
         self.character_hero_favorite_button.setObjectName("heroIconButton")
         self.character_hero_favorite_button.setParent(self.character_hero_card)
+        self.character_hero_favorite_button.setToolTip("Favorite character")
         self.character_hero_favorite_button.clicked.connect(self.toggle_active_character_favorite)
-
-        self.character_hero_menu_button = QPushButton("...")
-        self.character_hero_menu_button.setObjectName("heroIconButton")
-        self.character_hero_menu_button.setParent(self.character_hero_card)
-        self.character_hero_menu_button.clicked.connect(self.show_character_menu)
 
         self.character_hero_info = QFrame(self.character_hero_card)
         self.character_hero_info.setObjectName("characterHeroInfo")
@@ -1520,6 +1504,11 @@ class AgentChatWindow(QMainWindow):
         self.character_tags_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         hero_info_layout.addWidget(self.character_tags_label)
         character_section_layout.addWidget(self.character_hero_card)
+
+        self.character_picker_button = QPushButton("Change character")
+        self.character_picker_button.setObjectName("ghostButton")
+        self.character_picker_button.clicked.connect(self.show_character_menu)
+        character_section_layout.addWidget(self.character_picker_button)
 
         self.character_access_section = QWidget()
         access_layout = QVBoxLayout(self.character_access_section)
@@ -1566,24 +1555,7 @@ class AgentChatWindow(QMainWindow):
         personality_layout.addLayout(personality_row)
         character_section_layout.addWidget(self.character_personality_section)
 
-        self.character_source_compact_section = QWidget()
-        source_compact_layout = QVBoxLayout(self.character_source_compact_section)
-        source_compact_layout.setContentsMargins(0, 0, 0, 0)
-        source_compact_layout.setSpacing(6)
-        source_compact_heading = QLabel("Source")
-        source_compact_heading.setObjectName("sectionLabel")
-        source_compact_layout.addWidget(source_compact_heading)
-        source_compact_row = QHBoxLayout()
-        source_compact_row.setSpacing(8)
-        self.character_sync_label = QLabel("")
-        self.character_sync_label.setObjectName("characterMeta")
-        source_compact_row.addWidget(self.character_sync_label, 1)
-        self.character_source_sync_button = QPushButton("Sync")
-        self.character_source_sync_button.setObjectName("inlineLinkButton")
-        self.character_source_sync_button.clicked.connect(self.sync_characters)
-        source_compact_row.addWidget(self.character_source_sync_button)
-        source_compact_layout.addLayout(source_compact_row)
-        character_section_layout.addWidget(self.character_source_compact_section)
+        character_section_layout.addWidget(self.character_source_panel)
         layout.addWidget(self.character_section)
 
         self.workspace_section = QWidget()
@@ -2166,28 +2138,24 @@ class AgentChatWindow(QMainWindow):
             self.character_source_input.setText(self.character_profiles.get("source_url", ""))
             self.character_source_input.blockSignals(False)
         if hasattr(self, "character_picker_button"):
+            self.character_picker_button.setVisible(bool(character))
             if character:
                 self.character_picker_button.setText("Change character")
                 self.character_picker_button.setToolTip("Choose another character")
                 self.character_picker_button.setEnabled(True)
             else:
-                self.character_picker_button.setText("Sync characters first")
-                self.character_picker_button.setToolTip("Sync character profiles to start.")
+                self.character_picker_button.setText("Change character")
+                self.character_picker_button.setToolTip("")
                 self.character_picker_button.setEnabled(False)
-        if hasattr(self, "character_favorite_button"):
-            favorite = bool(character and local_state.get(character.get("id"), {}).get("favorite"))
-            self.character_favorite_button.setText("★" if favorite else "☆")
-            self.character_favorite_button.setEnabled(bool(character))
         if hasattr(self, "character_hero_favorite_button"):
             favorite = bool(character and local_state.get(character.get("id"), {}).get("favorite"))
             self.character_hero_favorite_button.setText("★" if favorite else "☆")
+            self.character_hero_favorite_button.setProperty("favorite", favorite)
             self.character_hero_favorite_button.setEnabled(bool(character))
-        if hasattr(self, "character_hero_menu_button"):
-            self.character_hero_menu_button.setEnabled(bool(character))
+            self.character_hero_favorite_button.style().unpolish(self.character_hero_favorite_button)
+            self.character_hero_favorite_button.style().polish(self.character_hero_favorite_button)
         if hasattr(self, "character_source_panel"):
-            self.character_source_panel.setVisible(not bool(character))
-        if hasattr(self, "character_source_compact_section"):
-            self.character_source_compact_section.setVisible(bool(character))
+            self.character_source_panel.setVisible(True)
         if hasattr(self, "character_hero_card"):
             self.character_hero_card.setVisible(bool(character))
         if hasattr(self, "character_access_section"):
@@ -2223,7 +2191,7 @@ class AgentChatWindow(QMainWindow):
         if hasattr(self, "character_sync_label"):
             last_sync = self.character_profiles.get("last_sync")
             self.character_sync_label.setText(self.character_sync_text(last_sync))
-            self.character_sync_label.setVisible(bool(character))
+            self.character_sync_label.setVisible(bool(last_sync))
         if hasattr(self, "character_prompt_heading"):
             self.character_prompt_heading.setVisible(bool(character))
         if hasattr(self, "character_prompt_preview"):
@@ -2277,28 +2245,6 @@ class AgentChatWindow(QMainWindow):
             character.get("description", "") or "No personality text available.",
         )
 
-    def animate_character_source_reveal(self):
-        if not hasattr(self, "character_source_compact_section"):
-            return
-        if self.character_source_compact_section.isHidden():
-            return
-        self.character_source_animation = QPropertyAnimation(
-            self.character_source_compact_section,
-            b"maximumHeight",
-            self,
-        )
-        self.character_source_animation.setDuration(260)
-        self.character_source_animation.setEasingCurve(QEasingCurve.Type.OutCubic)
-        self.character_source_animation.setStartValue(0)
-        self.character_source_animation.setEndValue(
-            max(1, self.character_source_compact_section.sizeHint().height())
-        )
-        self.character_source_compact_section.setMaximumHeight(0)
-        self.character_source_animation.finished.connect(
-            lambda: self.character_source_compact_section.setMaximumHeight(16777215)
-        )
-        self.character_source_animation.start()
-
     def refresh_character_tags(self, tags):
         while self.character_tags_layout.count():
             item = self.character_tags_layout.takeAt(0)
@@ -2342,8 +2288,7 @@ class AgentChatWindow(QMainWindow):
             return
         self.character_avatar_label.setGeometry(0, 0, width, height)
         button_y = 12
-        self.character_hero_menu_button.setGeometry(width - 44, button_y, 32, 28)
-        self.character_hero_favorite_button.setGeometry(width - 80, button_y, 32, 28)
+        self.character_hero_favorite_button.setGeometry(width - 44, button_y, 32, 28)
         info_width = width
         info_height = 92
         self.character_hero_info.setGeometry(
@@ -2355,7 +2300,6 @@ class AgentChatWindow(QMainWindow):
         self.character_avatar_label.lower()
         self.character_hero_info.raise_()
         self.character_hero_favorite_button.raise_()
-        self.character_hero_menu_button.raise_()
 
     def character_avatar_pixmap(self, character):
         avatar_url = str(character.get("avatar_url") or "").strip()
@@ -2402,8 +2346,6 @@ class AgentChatWindow(QMainWindow):
             self.set_status_message("Enter a character source URL.")
             return
         self.sync_characters_button.setEnabled(False)
-        if hasattr(self, "character_source_sync_button"):
-            self.character_source_sync_button.setEnabled(False)
         self.set_status_message("Syncing character profiles...")
         try:
             response = requests.get(source_url, timeout=20)
@@ -2436,7 +2378,6 @@ class AgentChatWindow(QMainWindow):
             }
             self.save_config()
             self.refresh_character_ui()
-            self.animate_character_source_reveal()
             self.update_send_availability()
             self.set_status_message(f"Synced {len(items)} character profile(s).")
             self.show_toast("Characters synced")
@@ -2447,8 +2388,6 @@ class AgentChatWindow(QMainWindow):
                 self.set_status_message(f"No character profiles available. {exc}")
         finally:
             self.sync_characters_button.setEnabled(True)
-            if hasattr(self, "character_source_sync_button"):
-                self.character_source_sync_button.setEnabled(True)
 
     def show_character_menu(self):
         items = sort_characters(
