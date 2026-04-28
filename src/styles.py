@@ -212,6 +212,21 @@ QPushButton#fieldIconButton[applied="true"] {
     color: #f2f3f5;
     border-color: #f2f3f5;
 }
+QPushButton#advancedCollapseButton {
+    min-width: 24px;
+    max-width: 24px;
+    min-height: 24px;
+    max-height: 24px;
+    padding: 0;
+    border: none;
+    border-radius: 0;
+    background: transparent;
+}
+QPushButton#advancedCollapseButton:hover,
+QPushButton#advancedCollapseButton:pressed {
+    border: none;
+    background: transparent;
+}
 QPushButton#inlineLinkButton {
     background: transparent;
     border: none;
@@ -242,170 +257,269 @@ QLabel#sessionPromptBadge {
     font-weight: 600;
 }
 QFrame#characterHeroCard {
-    background: #111315;
-    border: 1px solid #2a2d30;
-    border-radius: 6px;
+    background: qlineargradient(
+        x1:0, y1:0, x2:1, y2:1,
+        stop:0 #181b21,
+        stop:0.55 #12151a,
+        stop:1 #0d1014
+    );
+    border: 1px solid #2d333c;
+    border-radius: 20px;
 }
-QPushButton#heroIconButton {
-    min-width: 28px;
-    max-width: 28px;
-    min-height: 26px;
-    max-height: 26px;
-    padding: 0;
-    border: none;
-    background: rgba(15, 16, 17, 120);
-    color: #f2f3f5;
-    font-size: 11pt;
-    font-weight: 700;
+
+QFrame#characterHeroCard:hover {
+    border-color: #3b4450;
 }
-QPushButton#heroIconButton:hover {
-    background: rgba(242, 243, 245, 35);
-}
-QPushButton#heroIconButton[favorite="true"] {
-    color: #f5c84c;
-}
-QPushButton#heroIconButton[favorite="true"]:hover {
-    background: rgba(245, 200, 76, 45);
-}
+
 QLabel#characterHeroAvatar {
-    background: #101214;
-    color: #8c9298;
-    font-size: 16pt;
-    font-weight: 700;
+    background: #0f1216;
+    color: #9ca3af;
+    font-size: 20pt;
+    font-weight: 800;
+    border-radius: 18px;
 }
+
 QFrame#characterHeroInfo {
     background: qlineargradient(
         x1:0, y1:0, x2:0, y2:1,
-        stop:0 rgba(8, 10, 12, 0),
-        stop:0.36 rgba(8, 10, 12, 158),
-        stop:1 rgba(8, 10, 12, 232)
+        stop:0 rgba(6, 8, 12, 0),
+        stop:0.34 rgba(6, 8, 12, 130),
+        stop:0.72 rgba(6, 8, 12, 218),
+        stop:1 rgba(6, 8, 12, 245)
     );
     border: none;
     border-radius: 0px;
     min-width: 0px;
 }
+
 QLabel#characterName {
     color: #ffffff;
-    font-size: 15pt;
+    font-size: 17pt;
+    font-weight: 800;
+    letter-spacing: -0.02em;
+}
+
+QLabel#characterStyle {
+    color: #dbeafe;
+    font-size: 9.5pt;
     font-weight: 700;
 }
-QLabel#characterStyle {
-    color: #dfe5ea;
-    font-size: 9.5pt;
-    font-weight: 600;
-}
+
 QLabel#characterHeroTags {
-    color: #bfc6ce;
-    font-size: 9.5pt;
-    font-weight: 600;
+    color: #e5e7eb;
+    font-size: 9pt;
+    font-weight: 700;
+    background: rgba(15, 18, 24, 170);
+    border: 1px solid rgba(255, 255, 255, 22);
+    border-radius: 999px;
+    padding: 4px 8px;
 }
+
 QLabel#characterPersonality {
-    color: #c5c9ce;
+    color: #c7ced6;
     font-size: 10pt;
+    line-height: 1.35;
 }
+
 QLabel#characterMeta {
-    color: #c5c9ce;
+    color: #8f98a3;
+    font-size: 9.5pt;
+}
+
+QPushButton#heroIconButton {
+    min-width: 32px;
+    max-width: 32px;
+    min-height: 32px;
+    max-height: 32px;
+    padding: 0;
+    border-radius: 16px;
+    border: 1px solid rgba(255, 255, 255, 34);
+    background: rgba(6, 8, 12, 160);
+    color: #f8fafc;
+    font-size: 12pt;
+    font-weight: 800;
+}
+
+QPushButton#heroIconButton:hover {
+    background: rgba(16, 20, 28, 220);
+    border-color: rgba(255, 255, 255, 58);
+}
+
+QPushButton#heroIconButton[active="true"],
+QPushButton#heroIconButton[favorite="true"] {
+    color: #facc15;
+    background: rgba(37, 31, 10, 210);
+    border-color: rgba(250, 204, 21, 90);
+}
+
+QPushButton#inlineLinkButton {
+    background: transparent;
+    border: none;
+    color: #dbeafe;
+    padding: 2px 0;
     font-size: 10pt;
+    font-weight: 700;
 }
+
+QPushButton#inlineLinkButton:hover {
+    color: #ffffff;
+    text-decoration: underline;
+}
+
+QFrame#accessPanel {
+    background: #101318;
+    border: 1px solid #242a33;
+    border-radius: 16px;
+}
+
+QFrame#accessRow {
+    background: transparent;
+    border: none;
+}
+
+QFrame#accessRow:hover {
+    background: #151922;
+    border-radius: 12px;
+}
+
 QLabel#accessLabel {
-    color: #e8eaed;
+    color: #f1f5f9;
     font-size: 10.5pt;
-    font-weight: 600;
+    font-weight: 700;
 }
+
+QLabel#accessDescription {
+    color: #8d96a3;
+    font-size: 9.2pt;
+}
+
 QCheckBox#switchCheckBox {
     spacing: 0;
 }
+
 QCheckBox#switchCheckBox::indicator {
-    width: 38px;
-    height: 20px;
-    border-radius: 10px;
-    border: 1px solid #3a3f44;
-    background: #141618;
+    width: 42px;
+    height: 22px;
+    border-radius: 11px;
+    border: 1px solid #3a424c;
+    background: #111419;
 }
-QCheckBox#switchCheckBox::indicator:checked {
-    border-color: #f2f3f5;
-    background: #f2f3f5;
-}
+
 QCheckBox#switchCheckBox::indicator:hover {
-    border-color: #7d858d;
+    border-color: #5b6572;
+    background: #151a21;
 }
+
+QCheckBox#switchCheckBox::indicator:checked {
+    border-color: #7c6cff;
+    background: #7c6cff;
+}
+
 QFrame#characterOverlay {
-    background: rgba(8, 9, 10, 236);
-    border: 1px solid #25292e;
-    border-radius: 18px;
+    background: rgba(6, 8, 12, 242);
+    border: 1px solid #252b34;
+    border-radius: 22px;
 }
+
 QLabel#overlayTitle {
-    color: #f4f5f6;
-    font-size: 18pt;
-    font-weight: 700;
+    color: #f8fafc;
+    font-size: 20pt;
+    font-weight: 800;
+    letter-spacing: -0.02em;
 }
+
 QPushButton#overlayCloseButton {
-    min-width: 34px;
-    max-width: 34px;
-    min-height: 34px;
-    max-height: 34px;
+    min-width: 38px;
+    max-width: 38px;
+    min-height: 38px;
+    max-height: 38px;
     padding: 0;
-    border-radius: 10px;
-    background: #17191b;
-    border: 1px solid #2a2d30;
+    border-radius: 13px;
+    background: #151922;
+    border: 1px solid #2b323d;
+    color: #e5e7eb;
+    font-size: 13pt;
+    font-weight: 800;
 }
+
+QPushButton#overlayCloseButton:hover {
+    background: #1d2430;
+    border-color: #3b4554;
+}
+
 QPushButton#overlayRatioButton {
-    min-width: 58px;
-    max-width: 58px;
-    min-height: 34px;
-    max-height: 34px;
-    padding: 0 8px;
-    border-radius: 10px;
-    background: #17191b;
-    border: 1px solid #2a2d30;
-    color: #f4f5f6;
+    min-width: 66px;
+    max-width: 66px;
+    min-height: 38px;
+    max-height: 38px;
+    padding: 0 10px;
+    border-radius: 13px;
+    background: #151922;
+    border: 1px solid #2b323d;
+    color: #f8fafc;
     font-size: 10pt;
-    font-weight: 700;
+    font-weight: 800;
 }
+
 QPushButton#overlayRatioButton:hover {
-    background: #202326;
-    border-color: #3a3f44;
+    background: #1d2430;
+    border-color: #3b4554;
 }
+
 QScrollArea#characterOverlayScroll {
     background: transparent;
     border: none;
 }
+
 QFrame#characterChoiceCard {
-    background: #101214;
-    border: none;
-    border-radius: 16px;
+    background: #101318;
+    border: 1px solid #252b34;
+    border-radius: 20px;
 }
+
 QFrame#characterChoiceCard:hover,
 QFrame#characterChoiceCard[expanded="true"] {
-    background: #121518;
+    background: #121720;
+    border-color: #3d4654;
 }
+
+QFrame#characterChoiceCard[selected="true"] {
+    border: 2px solid #7c6cff;
+    background: #141927;
+}
+
 QLabel#characterChoiceCover {
-    background: #101214;
-    color: #8c9298;
-    font-size: 18pt;
-    font-weight: 700;
+    background: #0f1217;
+    color: #9ca3af;
+    font-size: 20pt;
+    font-weight: 800;
 }
+
 QFrame#characterChoiceInfo {
     background: qlineargradient(
         x1:0, y1:0, x2:0, y2:1,
-        stop:0 rgba(8, 10, 12, 0),
-        stop:0.34 rgba(8, 10, 12, 162),
-        stop:1 rgba(8, 10, 12, 236)
+        stop:0 rgba(6, 8, 12, 0),
+        stop:0.30 rgba(6, 8, 12, 128),
+        stop:0.76 rgba(6, 8, 12, 224),
+        stop:1 rgba(6, 8, 12, 248)
     );
     border: none;
 }
+
 QLabel#characterChoiceName {
     color: #ffffff;
-    font-size: 13pt;
+    font-size: 16pt;
+    font-weight: 800;
+}
+
+QLabel#characterChoiceMeta {
+    color: #dbeafe;
+    font-size: 9.5pt;
     font-weight: 700;
 }
-QLabel#characterChoiceMeta {
-    color: #dfe5ea;
-    font-size: 9.5pt;
-    font-weight: 600;
-}
+
 QLabel#characterChoiceDescription {
-    color: #f0f3f6;
+    color: #f1f5f9;
     font-size: 10pt;
     font-weight: 500;
 }
