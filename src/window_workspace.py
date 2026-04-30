@@ -173,7 +173,15 @@ class WorkspaceLayoutMixin:
         timer.setInterval(850)
         timer.timeout.connect(lambda area=scroll_area: self.hide_auto_scrollbar(area))
         self.auto_scrollbar_timers[scroll_area] = timer
-        scrollbar.valueChanged.connect(lambda _value, area=scroll_area: self.show_auto_scrollbar(area))
+        scrollbar.valueChanged.connect(lambda _value, area=scroll_area: self.track_auto_scrollbar_range(area))
+
+    def track_auto_scrollbar_range(self, scroll_area):
+        scrollbar = scroll_area.verticalScrollBar()
+        if scrollbar.maximum() <= 0:
+            scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            timer = self.auto_scrollbar_timers.get(scroll_area)
+            if timer is not None:
+                timer.stop()
 
     def show_auto_scrollbar(self, scroll_area):
         scrollbar = scroll_area.verticalScrollBar()
