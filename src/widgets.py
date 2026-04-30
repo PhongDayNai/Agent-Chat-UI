@@ -43,6 +43,7 @@ from PyQt6.QtWidgets import (
 
 from constants import (
     ARROW_RIGHT_ICON_PATH,
+    CLIPBOARD_IMAGE_DIR,
     CODE_STICKY_CONTENT_PADDING,
     CODE_STICKY_HEADER_HEIGHT,
     COPY_ICON_PATH,
