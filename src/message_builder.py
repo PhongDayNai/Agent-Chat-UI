@@ -3,11 +3,16 @@
 from characters import get_active_character, get_effective_character_capabilities
 from modes import MODE_AGENT, MODE_CHARACTER
 
+DEFAULT_RESPONSE_STYLE_INSTRUCTION = (
+    "Respond in the same language the user uses. Address the user with the same "
+    "tone, pronouns, and form of address that the user uses with you."
+)
+
 
 def build_messages(config, history, user_message, terminal_instruction=None, mcp_instruction=None):
     mode = config.get("active_mode", "chat")
     messages = []
-    sections = []
+    sections = [DEFAULT_RESPONSE_STYLE_INSTRUCTION]
 
     if mode == MODE_CHARACTER:
         profiles = config.get("character_profiles", {})

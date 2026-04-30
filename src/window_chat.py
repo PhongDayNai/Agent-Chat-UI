@@ -120,13 +120,12 @@ class ChatFlowMixin:
         should_fetch_urls = bool(prompt_text and self.url_context_allowed_for_mode())
         self.set_status_message("Reading links..." if should_fetch_urls and self.detect_urls(prompt_text) else "Preparing message...")
         url_inputs = self.fetch_urls_for_prompt(prompt_text) if should_fetch_urls else []
-        user_message = self.build_user_message(prompt_text, attachments, url_inputs)
+        attachment_only_prompt = self.attachment_only_prompt(attachments) if attachments and not prompt_text else ""
+        user_message = self.build_user_message(prompt_text, attachments, url_inputs, attachment_only_prompt)
         if prompt_text:
             user_display = prompt_text
         elif attachments:
-            user_display = (
-                "Refer to this:" if self.has_existing_conversation_content() else "Sent attachments."
-            )
+            user_display = attachment_only_prompt
         else:
             user_display = ""
         return {
@@ -137,6 +136,55 @@ class ChatFlowMixin:
             "user_display": user_display,
             "model_name": self.current_model_name(),
         }
+
+    def attachment_only_prompt(self, attachments):
+        if self.previous_user_has_matching_attachment_category(attachments):
+            return "Refer to this:"
+        return "Sent attachments."
+
+    def previous_user_has_matching_attachment_category(self, attachments):
+        current_categories = self.attachment_categories(attachments)
+        if not current_categories:
+            return False
+        previous_categories = self.previous_user_attachment_categories()
+        return bool(current_categories & previous_categories)
+
+    def previous_user_attachment_categories(self):
+        if not hasattr(self, "messages_layout"):
+            return set()
+        for index in range(self.messages_layout.count() - 1, -1, -1):
+            item = self.messages_layout.itemAt(index)
+            widget = item.widget() if item is not None else None
+            if not isinstance(widget, MessageCard) or widget.role != "user":
+                continue
+            return self.attachment_categories(widget.attachments)
+        return set()
+
+    def attachment_categories(self, attachments):
+        categories = set()
+        for item in attachments:
+            category = self.attachment_category(item)
+            if category:
+                categories.add(category)
+        return categories
+
+    def attachment_category(self, attachment):
+        attachment_type = str(attachment.get("type", "")).strip().lower()
+        if attachment_type in {"image", "video", "audio"}:
+            return attachment_type
+        suffix = Path(str(attachment.get("path", ""))).suffix.lower()
+        if suffix in {
+            ".py", ".js", ".ts", ".tsx", ".jsx", ".kt", ".java", ".c", ".cpp",
+            ".h", ".hpp", ".rs", ".sh", ".bash", ".zsh", ".bat", ".ps1",
+            ".sql", ".html", ".css",
+        }:
+            return "code"
+        if suffix in {
+            ".pdf", ".doc", ".docx", ".txt", ".md", ".csv", ".json", ".xml",
+            ".yaml", ".yml", ".ini", ".cfg", ".conf", ".log", ".toml",
+        }:
+            return "document"
+        return attachment_type or "file"
 
     def try_make_submission(self, user_text, attachments):
         try:
@@ -336,12 +384,12 @@ class ChatFlowMixin:
             )
         self.refresh_session_prompt_history_ui()
 
-    def build_user_message(self, user_text, attachments, url_inputs=None):
+    def build_user_message(self, user_text, attachments, url_inputs=None, attachment_only_prompt=""):
         url_inputs = url_inputs or []
         if not attachments and not url_inputs:
             return {"role": "user", "content": user_text}
 
-        prompt = user_text or "Describe the attached inputs."
+        prompt = user_text or attachment_only_prompt or "Describe the attached inputs."
         content = [{"type": "text", "text": prompt}]
         attachment_sections = []
         url_sections = []
