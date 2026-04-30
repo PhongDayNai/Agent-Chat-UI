@@ -154,6 +154,12 @@ QLabel#sectionLabel {
     color: #8c9298;
     letter-spacing: 0.03em;
 }
+QLabel#sidebarGroupLabel {
+    font-size: 11.5pt;
+    font-weight: 800;
+    color: #c6ccd3;
+    letter-spacing: 0.04em;
+}
 QFrame#panel QCheckBox {
     spacing: 10px;
     color: #e8eaed;
@@ -213,10 +219,10 @@ QPushButton#fieldIconButton[applied="true"] {
     border-color: #f2f3f5;
 }
 QPushButton#advancedCollapseButton {
-    min-width: 24px;
-    max-width: 24px;
-    min-height: 24px;
-    max-height: 24px;
+    min-width: 30px;
+    max-width: 30px;
+    min-height: 30px;
+    max-height: 30px;
     padding: 0;
     border: none;
     border-radius: 0;

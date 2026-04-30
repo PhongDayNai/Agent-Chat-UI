@@ -2,6 +2,13 @@
 
 DEFAULT_CHARACTER_CAPABILITIES = {
     "file_context": True,
+    "url_context": True,
+    "terminal": False,
+    "mcp": False,
+}
+
+LEGACY_DEFAULT_CHARACTER_CAPABILITIES = {
+    "file_context": True,
     "url_context": False,
     "terminal": False,
     "mcp": False,
@@ -19,6 +26,8 @@ DEFAULT_CHARACTER_PROFILES = {
 def normalize_capabilities(value):
     caps = dict(DEFAULT_CHARACTER_CAPABILITIES)
     if isinstance(value, dict):
+        if all(value.get(key) == legacy_value for key, legacy_value in LEGACY_DEFAULT_CHARACTER_CAPABILITIES.items()):
+            return caps
         for key in DEFAULT_CHARACTER_CAPABILITIES:
             if key in value:
                 caps[key] = bool(value.get(key))
