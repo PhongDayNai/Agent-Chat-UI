@@ -644,26 +644,118 @@ class ChatFlowMixin:
             QTimer.singleShot(0, self.position_character_hero_elements)
             QTimer.singleShot(0, lambda: self.refresh_character_avatar(self.active_character()))
         if (
-            self.assistant_reply_focus_active
+            self.worker is not None
+            and self.worker.isRunning()
+            and self.current_assistant_card is not None
             and watched in (self.scroll_area.viewport(), self.scroll_area.verticalScrollBar())
             and event.type() in (
                 QEvent.Type.Wheel,
                 QEvent.Type.MouseButtonPress,
                 QEvent.Type.MouseButtonDblClick,
+                QEvent.Type.MouseMove,
+                QEvent.Type.MouseButtonRelease,
                 QEvent.Type.KeyPress,
             )
         ):
+            event_type = event.type()
+            self.assistant_reply_scroll_interaction_active = True
+            if event_type == QEvent.Type.Wheel:
+                wheel_delta = event.angleDelta().y() or event.pixelDelta().y()
+                if wheel_delta > 0:
+                    self.assistant_reply_scroll_away_requested = True
+            if event_type == QEvent.Type.KeyPress and event.key() in (
+                Qt.Key.Key_Down,
+                Qt.Key.Key_PageDown,
+                Qt.Key.Key_End,
+            ):
+                self.assistant_reply_scroll_away_requested = False
+            if event_type == QEvent.Type.KeyPress and event.key() in (
+                Qt.Key.Key_Up,
+                Qt.Key.Key_PageUp,
+                Qt.Key.Key_Home,
+            ):
+                self.assistant_reply_scroll_away_requested = True
             self.stop_assistant_reply_focus()
+            if event_type in (
+                QEvent.Type.Wheel,
+                QEvent.Type.MouseButtonRelease,
+                QEvent.Type.KeyPress,
+            ):
+                self.reconcile_assistant_reply_follow_after_scroll()
         return super().eventFilter(watched, event)
 
     def start_assistant_reply_focus(self, card):
         self.assistant_reply_focus_card = card
         self.assistant_reply_focus_active = True
+        self.assistant_reply_scroll_away_requested = False
         self.scroll_to_assistant_reply()
 
     def stop_assistant_reply_focus(self):
         self.assistant_reply_focus_active = False
         self.assistant_reply_focus_card = None
+
+    def update_assistant_reply_follow_state(self, *_args):
+        scrollbar = self.scroll_area.verticalScrollBar()
+        self.assistant_reply_last_scroll_max = scrollbar.maximum()
+        if self.current_assistant_card is None:
+            return
+        if self.worker is None or not self.worker.isRunning():
+            return
+        if self.assistant_reply_focus_active:
+            return
+        if getattr(self, "assistant_reply_scroll_away_requested", False):
+            if self.is_chat_scrolled_to_bottom(threshold=2):
+                self.assistant_reply_scroll_away_requested = False
+                self.start_assistant_reply_focus(self.current_assistant_card)
+            return
+        if self.is_chat_scrolled_to_bottom(threshold=48):
+            self.assistant_reply_scroll_away_requested = False
+            self.start_assistant_reply_focus(self.current_assistant_card)
+
+    def update_assistant_reply_follow_range(self, _minimum, maximum):
+        scrollbar = self.scroll_area.verticalScrollBar()
+        previous_maximum = getattr(self, "assistant_reply_last_scroll_max", 0)
+        was_at_bottom = previous_maximum - scrollbar.value() <= 64
+        self.assistant_reply_last_scroll_max = maximum
+        if self.current_assistant_card is None:
+            return
+        if self.worker is None or not self.worker.isRunning():
+            return
+        if getattr(self, "assistant_reply_scroll_interaction_active", False):
+            return
+        if getattr(self, "assistant_reply_scroll_away_requested", False):
+            if self.is_chat_scrolled_to_bottom(threshold=2):
+                self.assistant_reply_scroll_away_requested = False
+                self.start_assistant_reply_focus(self.current_assistant_card)
+            return
+        if self.assistant_reply_focus_active or was_at_bottom:
+            self.start_assistant_reply_focus(self.current_assistant_card)
+
+    def reconcile_assistant_reply_follow_after_scroll(self):
+        def reconcile():
+            try:
+                if self.current_assistant_card is None:
+                    return
+                if self.worker is None or not self.worker.isRunning():
+                    return
+                if (
+                    not getattr(self, "assistant_reply_scroll_away_requested", False)
+                    and self.is_chat_scrolled_to_bottom(threshold=64)
+                ):
+                    self.start_assistant_reply_focus(self.current_assistant_card)
+                else:
+                    self.stop_assistant_reply_focus()
+            finally:
+                self.assistant_reply_scroll_interaction_active = False
+
+        QTimer.singleShot(80, reconcile)
+
+    def handle_assistant_reply_content_changed(self, card):
+        if not self.assistant_reply_focus_active:
+            return
+        if self.assistant_reply_focus_card is not card:
+            return
+        self.scroll_to_assistant_reply()
 
     def scroll_to_assistant_reply(self):
         card = self.assistant_reply_focus_card
@@ -674,9 +766,7 @@ class ChatFlowMixin:
             if not self.assistant_reply_focus_active or self.assistant_reply_focus_card is not card:
                 return
             scrollbar = self.scroll_area.verticalScrollBar()
-            top = card.mapTo(self.chat_surface, QPoint(0, 0)).y()
-            target = max(0, top - self.chat_layout.contentsMargins().top())
-            scrollbar.setValue(min(target, scrollbar.maximum()))
+            scrollbar.setValue(scrollbar.maximum())
 
         QTimer.singleShot(0, apply_scroll)
 

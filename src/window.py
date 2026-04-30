@@ -158,6 +158,9 @@ class AgentChatWindow(
         self.pending_terminal_permission = None
         self.assistant_reply_focus_active = False
         self.assistant_reply_focus_card = None
+        self.assistant_reply_last_scroll_max = 0
+        self.assistant_reply_scroll_interaction_active = False
+        self.assistant_reply_scroll_away_requested = False
         self.selected_model_name = ""
         self.server_connected = False
         self.server_url_editing = False
@@ -257,6 +260,8 @@ class AgentChatWindow(
         self.setup_auto_hide_scrollbar(self.scroll_area)
         content_layout.addWidget(self.scroll_area)
         self.scroll_area.verticalScrollBar().valueChanged.connect(self.update_sticky_code_header)
+        self.scroll_area.verticalScrollBar().valueChanged.connect(self.update_assistant_reply_follow_state)
+        self.scroll_area.verticalScrollBar().rangeChanged.connect(self.update_assistant_reply_follow_range)
 
         self.chat_surface = QWidget()
         self.chat_layout = QVBoxLayout(self.chat_surface)

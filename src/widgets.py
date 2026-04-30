@@ -1435,6 +1435,12 @@ class MessageCard(QFrame):
                 self.render_assistant_content(self.post_body_layout, post_text)
             else:
                 self.clear_layout(self.post_body_layout)
+        self.notify_assistant_content_changed()
+
+    def notify_assistant_content_changed(self):
+        window = self.window()
+        if hasattr(window, "handle_assistant_reply_content_changed"):
+            QTimer.singleShot(0, lambda: window.handle_assistant_reply_content_changed(self))
 
     def flush_pending_render(self):
         if self.role != "assistant" or self.pending_render_text is None:
