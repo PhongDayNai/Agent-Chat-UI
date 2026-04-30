@@ -144,6 +144,23 @@ QLabel#titleLabel {
     font-weight: 700;
     color: #f4f5f6;
 }
+QLabel#chatTitleLabel {
+    font-size: 13pt;
+    font-weight: 800;
+    color: #f4f5f6;
+}
+QLabel#chatSubtitleLabel {
+    font-size: 8.5pt;
+    color: #7f868d;
+}
+QWidget#contextUsageHeader {
+    background: transparent;
+}
+QLabel#contextUsageLabel {
+    font-size: 8.5pt;
+    font-weight: 600;
+    color: #9aa1a9;
+}
 QLabel#subtleLabel {
     color: #8c9298;
     font-size: 10pt;

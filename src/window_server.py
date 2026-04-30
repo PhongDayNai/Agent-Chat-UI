@@ -79,7 +79,14 @@ class ServerSettingsMixin:
                 return
 
             payload = response.json()
-            models = [item.get("id", "") for item in payload.get("data", []) if item.get("id")]
+            model_items = payload.get("data", [])
+            self.model_metadata = {
+                item.get("id", ""): item
+                for item in model_items
+                if item.get("id")
+            }
+            self.runtime_context_window = self.fetch_runtime_context_window(headers)
+            models = [item.get("id", "") for item in model_items if item.get("id")]
             self.available_models = models
             self.populate_models(models)
 
@@ -102,6 +109,78 @@ class ServerSettingsMixin:
             self.refresh_api_key_ui()
             self.refresh_connection_settings_ui()
             self.update_send_availability()
+            self.refresh_chat_header()
+
+    def fetch_runtime_context_window(self, headers):
+        for path, parser in (
+            ("/slots", self.parse_slots_context_window),
+            ("/props", self.parse_props_context_window),
+        ):
+            try:
+                response = requests.get(self.build_server_url(path), headers=headers, timeout=2)
+            except Exception:
+                continue
+            if response.status_code != 200:
+                continue
+            value = parser(response.json())
+            if value:
+                return value
+        return self.model_context_window(self.current_model_name())
+
+    def parse_slots_context_window(self, payload):
+        if not isinstance(payload, list):
+            return 0
+        for slot in payload:
+            if not isinstance(slot, dict):
+                continue
+            value = self.normalize_context_window_value(slot.get("n_ctx"))
+            if value:
+                return value
+        return 0
+
+    def parse_props_context_window(self, payload):
+        if not isinstance(payload, dict):
+            return 0
+        settings = payload.get("default_generation_settings")
+        if isinstance(settings, dict):
+            value = self.normalize_context_window_value(settings.get("n_ctx"))
+            if value:
+                return value
+        return 0
+
+    def normalize_context_window_value(self, value):
+        try:
+            numeric_value = int(value)
+        except (TypeError, ValueError):
+            return 0
+        return max(0, numeric_value)
+
+    def model_context_window(self, model_name):
+        item = self.model_metadata.get(model_name) if hasattr(self, "model_metadata") else None
+        if not isinstance(item, dict):
+            return 0
+        candidates = [
+            item.get("context_length"),
+            item.get("max_context_length"),
+            item.get("max_model_len"),
+            item.get("n_ctx"),
+        ]
+        meta = item.get("meta")
+        if isinstance(meta, dict):
+            candidates.extend(
+                [
+                    meta.get("n_ctx"),
+                    meta.get("n_ctx_train"),
+                    meta.get("context_length"),
+                    meta.get("max_context_length"),
+                    meta.get("max_model_len"),
+                ]
+            )
+        for candidate in candidates:
+            value = self.normalize_context_window_value(candidate)
+            if value:
+                return value
+        return 0
 
     def populate_models(self, models):
         current_text = self.current_model_name()
@@ -117,6 +196,8 @@ class ServerSettingsMixin:
     def set_disconnected_state(self, detail):
         self.server_connected = False
         self.available_models = []
+        self.model_metadata = {}
+        self.runtime_context_window = 0
         self.set_selected_model_name("")
         self.model_selector.setEnabled(False)
         self.status_badge.setText("Disconnected")
@@ -129,6 +210,7 @@ class ServerSettingsMixin:
     def set_selected_model_name(self, model_name):
         self.selected_model_name = model_name.strip()
         self.update_model_selector_text()
+        self.refresh_chat_header()
         self.update_send_availability()
 
     def update_model_selector_text(self):

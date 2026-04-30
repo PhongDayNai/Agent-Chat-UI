@@ -12,7 +12,7 @@ from urllib.parse import urlparse
 
 import requests
 from PyQt6.QtCore import QByteArray, QBuffer, QEasingCurve, QEvent, QIODevice, QPoint, QPropertyAnimation, QRectF, QSize, QTimer, QUrl, Qt
-from PyQt6.QtGui import QDesktopServices, QFontMetrics, QGuiApplication, QIcon, QImage, QPainter, QPixmap, QTransform
+from PyQt6.QtGui import QDesktopServices, QFontMetrics, QGuiApplication, QIcon, QImage, QMovie, QPainter, QPixmap, QTransform
 from PyQt6.QtSvg import QSvgRenderer
 from PyQt6.QtWidgets import QFileDialog, QFrame, QHBoxLayout, QLabel, QMenu, QMessageBox, QPushButton, QVBoxLayout, QWidget, QWidgetAction
 
@@ -38,7 +38,7 @@ from characters import (
 )
 from character_widgets import CharacterAccessPanel, CharacterSidebarHeroCard, render_svg_pixmap
 from message_builder import build_messages
-from modes import MODE_AGENT, MODE_CHARACTER, MODE_CHAT, normalize_mode
+from modes import MODE_AGENT, MODE_CHARACTER, MODE_CHAT, MODE_LABELS, normalize_mode
 from widgets import AttachmentChip, FilePreviewDialog, ImageGalleryDialog, MessageCard, AssistantCodeBlock
 from worker import ChatCompletionWorker
 import key_storage
@@ -247,6 +247,11 @@ class ChatFlowMixin:
             self.current_assistant_card.update_text("_Select a character before sending._")
             self.update_send_availability()
             return
+        self.context_usage_prompt_tokens = self.estimate_messages_tokens(messages)
+        self.context_usage_completion_tokens = 0
+        self.context_usage_completion_text = ""
+        self.context_usage_completion_loading = True
+        self.refresh_chat_header()
 
         self.worker = ChatCompletionWorker(self)
         self.worker.configure(
@@ -467,6 +472,173 @@ class ChatFlowMixin:
             },
         }
 
+    def refresh_chat_header(self):
+        if not hasattr(self, "chat_title_label"):
+            return
+        title, subtitle = self.chat_header_text()
+        self.chat_title_label.setText(title)
+        self.chat_subtitle_label.setText(subtitle)
+
+        enabled = self.context_usage_enabled_for_mode()
+        if hasattr(self, "context_usage_checkbox"):
+            self.context_usage_checkbox.blockSignals(True)
+            self.context_usage_checkbox.setChecked(enabled)
+            self.context_usage_checkbox.blockSignals(False)
+        if hasattr(self, "context_usage_toggle_label"):
+            self.context_usage_toggle_label.setText(f"Show usage in {MODE_LABELS[self.active_mode]} mode")
+
+        context_window = self.active_context_window()
+        current_tokens = self.context_usage_prompt_tokens + self.context_usage_completion_tokens
+        if hasattr(self, "context_usage_frame"):
+            self.context_usage_frame.setVisible(enabled)
+            self.context_usage_frame.setToolTip(
+                self.context_usage_tooltip(
+                    self.context_usage_prompt_tokens,
+                    self.context_usage_completion_tokens,
+                    context_window,
+                )
+            )
+        if hasattr(self, "context_usage_label"):
+            self.context_usage_label.setText(
+                f"Context {self.format_token_amount(current_tokens)} / {self.format_token_amount(context_window)}"
+            )
+        loading_active = enabled and self.context_usage_completion_loading
+        if hasattr(self, "context_usage_new_tokens_label"):
+            self.context_usage_new_tokens_label.setText(str(self.context_usage_completion_tokens))
+            self.context_usage_new_tokens_label.setVisible(not loading_active)
+        if hasattr(self, "context_usage_loading_label"):
+            self.context_usage_loading_label.setVisible(loading_active)
+        if hasattr(self, "context_usage_loading_movie"):
+            if loading_active:
+                if self.context_usage_loading_movie.state() != QMovie.MovieState.Running:
+                    self.context_usage_loading_movie.start()
+            else:
+                self.context_usage_loading_movie.stop()
+        if hasattr(self, "context_usage_detail"):
+            self.context_usage_detail.setText(self.context_usage_detail_text(context_window))
+
+    def chat_header_text(self):
+        if self.active_mode == MODE_AGENT:
+            return "Agent", f"Workspace: {self.workspace_path}"
+        if self.active_mode == MODE_CHARACTER:
+            character = self.active_character()
+            if character:
+                return character.get("name", "Character"), "Character chat"
+            return "Character", "Select a character to start"
+        return "Chat", "General conversation"
+
+    def active_context_window(self):
+        runtime_value = self.normalize_context_window_value(getattr(self, "runtime_context_window", 0))
+        if runtime_value:
+            return runtime_value
+        return self.model_context_window(self.current_model_name())
+
+    def context_usage_tooltip(self, prompt_tokens, completion_tokens, context_window):
+        new_tokens = "loading" if self.context_usage_completion_loading else str(completion_tokens)
+        return (
+            "context "
+            f"{self.format_token_amount(prompt_tokens)} + {new_tokens}"
+            f"/{self.format_token_amount(context_window)}"
+        )
+
+    def context_usage_detail_text(self, context_window):
+        if not self.context_usage_enabled_for_mode():
+            return "Hidden for this mode."
+        if context_window:
+            return f"Runtime context window: {self.format_token_amount(context_window)} tokens."
+        return "Runtime context window: unknown."
+
+    def format_token_amount(self, value):
+        value = self.normalize_context_window_value(value)
+        if not value:
+            return "--"
+        if value >= 1000:
+            return f"{value / 1000:.1f}k"
+        return str(value)
+
+    def estimate_messages_tokens(self, messages):
+        total = 0
+        for message in messages:
+            total += 4
+            total += self.count_content_tokens(message.get("content", ""))
+        return total
+
+    def count_content_tokens(self, content):
+        if isinstance(content, str):
+            return self.count_text_tokens(content)
+        if isinstance(content, list):
+            total = 0
+            for item in content:
+                if not isinstance(item, dict):
+                    continue
+                if item.get("type") == "text":
+                    total += self.count_text_tokens(item.get("text", ""))
+                elif item.get("type") == "image_url":
+                    total += 256
+                else:
+                    total += 64
+            return total
+        return self.count_text_tokens(str(content))
+
+    def count_text_tokens(self, text):
+        text = str(text or "")
+        if not text:
+            return 0
+        for counter in (
+            self.server_tokenize_text,
+            self.local_tokenize_text,
+            self.estimate_text_tokens,
+        ):
+            value = counter(text)
+            if value is not None:
+                return value
+        return 0
+
+    def server_tokenize_text(self, text):
+        try:
+            response = requests.post(
+                self.build_server_url("/tokenize"),
+                json={"content": text},
+                headers=self.auth_headers(),
+                timeout=8,
+            )
+        except Exception:
+            return None
+        if response.status_code != 200:
+            return None
+        try:
+            payload = response.json()
+        except ValueError:
+            return None
+        tokens = payload.get("tokens") if isinstance(payload, dict) else None
+        if not isinstance(tokens, list):
+            return None
+        return len(tokens)
+
+    def local_tokenize_text(self, text):
+        try:
+            import tiktoken
+        except ImportError:
+            return None
+        model_name = self.current_model_name()
+        try:
+            encoding = tiktoken.encoding_for_model(model_name)
+        except Exception:
+            try:
+                encoding = tiktoken.get_encoding("cl100k_base")
+            except Exception:
+                return None
+        try:
+            return len(encoding.encode(text))
+        except Exception:
+            return None
+
+    def estimate_text_tokens(self, text):
+        text = str(text or "")
+        if not text:
+            return None
+        return max(1, round(len(text) / 4))
+
     def send_message(self):
         if self.worker is not None and self.worker.isRunning():
             self.enqueue_current_input()
@@ -504,6 +676,8 @@ class ChatFlowMixin:
 
     def on_token_received(self, token):
         should_focus_reply = self.assistant_reply_focus_active
+        self.context_usage_completion_text += token
+        self.refresh_chat_header()
         if self.current_assistant_card is not None:
             self.current_assistant_card.stop_loading()
             if not self.current_assistant_card.raw_text:
@@ -524,6 +698,10 @@ class ChatFlowMixin:
         if self.current_assistant_card is not None:
             self.current_assistant_card.flush_pending_render()
             self.current_assistant_card.stop_loading()
+        self.context_usage_completion_text = full_response or self.context_usage_completion_text
+        self.context_usage_completion_tokens = self.count_text_tokens(self.context_usage_completion_text)
+        self.context_usage_completion_loading = False
+        self.refresh_chat_header()
         self.stop_assistant_reply_focus()
         if hasattr(self, "terminal_approval_banner"):
             self.terminal_approval_banner.hide()
@@ -554,6 +732,8 @@ class ChatFlowMixin:
         self.composer.setFocus()
 
     def on_error(self, message):
+        self.context_usage_completion_loading = False
+        self.refresh_chat_header()
         self.stop_assistant_reply_focus()
         if hasattr(self, "terminal_approval_banner"):
             self.terminal_approval_banner.hide()
@@ -842,6 +1022,10 @@ class ChatFlowMixin:
         self.pending_user_text = None
         self.pending_user_message = None
         self.pending_terminal_permission = None
+        self.context_usage_prompt_tokens = 0
+        self.context_usage_completion_tokens = 0
+        self.context_usage_completion_text = ""
+        self.context_usage_completion_loading = False
         self.stop_assistant_reply_focus()
         if hasattr(self, "terminal_approval_banner"):
             self.terminal_approval_banner.hide()
@@ -861,3 +1045,4 @@ class ChatFlowMixin:
         self.refresh_queue_ui()
         self.update_empty_state()
         self.update_send_availability()
+        self.refresh_chat_header()

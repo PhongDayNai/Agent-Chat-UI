@@ -1,7 +1,7 @@
 """Main application window."""
 
 from PyQt6.QtCore import QEasingCurve, QPropertyAnimation, QSize, QTimer, Qt
-from PyQt6.QtGui import QIcon
+from PyQt6.QtGui import QIcon, QMovie
 from PyQt6.QtWidgets import (
     QApplication,
     QBoxLayout,
@@ -27,6 +27,7 @@ from constants import (
     APP_LOGO_PATH,
     APP_VERSION,
     APP_WORKSPACE,
+    ANIM_LOADING_SMALL_PATH,
     ARROW_UP_ICON_PATH,
     DEFAULT_SERVER_BASE_URL,
     PENCIL_ICON_PATH,
@@ -92,6 +93,12 @@ class AgentChatWindow(
         self.pending_attachments = []
         self.message_queue = []
         self.available_models = []
+        self.model_metadata = {}
+        self.runtime_context_window = 0
+        self.context_usage_prompt_tokens = 0
+        self.context_usage_completion_tokens = 0
+        self.context_usage_completion_text = ""
+        self.context_usage_completion_loading = False
         self.base_url = DEFAULT_SERVER_BASE_URL
         self.config_needs_save = False
         self.api_key_storage_warnings = []
@@ -149,6 +156,9 @@ class AgentChatWindow(
         )
         self.show_thinking = bool(ui_config.get("show_thinking", False))
         self.pin_panel = bool(ui_config.get("pin_panel", False))
+        self.context_usage_enabled_by_mode = self.normalize_context_usage_config(
+            ui_config.get("context_usage")
+        )
         self.composer_max_lines = self.normalize_composer_max_lines(
             ui_config.get("composer_max_lines", DEFAULT_COMPOSER_MAX_LINES)
         )
@@ -250,6 +260,54 @@ class AgentChatWindow(
         content_layout.setContentsMargins(0, 0, 0, 0)
         content_layout.setSpacing(0)
 
+        chat_header = QWidget()
+        chat_header.setObjectName("chatHeader")
+        chat_header_layout = QHBoxLayout(chat_header)
+        chat_header_layout.setContentsMargins(26, 16, 26, 12)
+        chat_header_layout.setSpacing(12)
+
+        chat_header_text = QVBoxLayout()
+        chat_header_text.setContentsMargins(0, 0, 0, 0)
+        chat_header_text.setSpacing(2)
+        self.chat_title_label = QLabel("")
+        self.chat_title_label.setObjectName("chatTitleLabel")
+        chat_header_text.addWidget(self.chat_title_label)
+        self.chat_subtitle_label = QLabel("")
+        self.chat_subtitle_label.setObjectName("chatSubtitleLabel")
+        chat_header_text.addWidget(self.chat_subtitle_label)
+        chat_header_layout.addLayout(chat_header_text, 1)
+
+        self.context_usage_frame = QWidget()
+        self.context_usage_frame.setObjectName("contextUsageHeader")
+        context_usage_layout = QHBoxLayout(self.context_usage_frame)
+        context_usage_layout.setContentsMargins(0, 0, 0, 0)
+        context_usage_layout.setSpacing(4)
+        self.context_usage_label = QLabel("Context -- / --")
+        self.context_usage_label.setObjectName("contextUsageLabel")
+        context_usage_layout.addWidget(self.context_usage_label)
+        self.context_usage_icon = QLabel("")
+        self.context_usage_icon.setPixmap(render_svg_pixmap(ARROW_UP_ICON_PATH, QSize(12, 12), "#70d56b"))
+        context_usage_layout.addWidget(self.context_usage_icon)
+        self.context_usage_new_tokens_label = QLabel("0")
+        self.context_usage_new_tokens_label.setObjectName("contextUsageLabel")
+        self.context_usage_new_tokens_label.setMinimumWidth(24)
+        self.context_usage_new_tokens_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        context_usage_layout.addWidget(self.context_usage_new_tokens_label)
+        self.context_usage_loading_label = QLabel("")
+        self.context_usage_loading_label.setFixedSize(24, 14)
+        self.context_usage_loading_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        self.context_usage_loading_movie = QMovie(str(ANIM_LOADING_SMALL_PATH))
+        self.context_usage_loading_movie.setScaledSize(QSize(14, 14))
+        self.context_usage_loading_label.setMovie(self.context_usage_loading_movie)
+        self.context_usage_loading_label.setVisible(False)
+        context_usage_layout.addWidget(self.context_usage_loading_label)
+        chat_header_layout.addWidget(
+            self.context_usage_frame,
+            0,
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+        )
+        content_layout.addWidget(chat_header)
+
         self.scroll_area = QScrollArea()
         self.scroll_area.setWidgetResizable(True)
         self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -301,6 +359,7 @@ class AgentChatWindow(
         self.refresh_terminal_permission_ui()
         self.refresh_character_ui()
         self.refresh_mode_ui()
+        self.refresh_chat_header()
         self.update_empty_state()
         self.update_send_availability()
         self.apply_responsive_layout()
@@ -898,6 +957,35 @@ class AgentChatWindow(
         composer_settings_layout.addLayout(composer_layout)
         composer_body_layout.addWidget(composer_settings_section)
 
+        self.context_usage_section = QWidget()
+        context_usage_section_layout = QVBoxLayout(self.context_usage_section)
+        context_usage_section_layout.setContentsMargins(0, 0, 0, 0)
+        context_usage_section_layout.setSpacing(8)
+
+        context_usage_heading = QLabel("Context")
+        context_usage_heading.setObjectName("sectionLabel")
+        context_usage_section_layout.addWidget(context_usage_heading)
+
+        context_usage_row = QHBoxLayout()
+        context_usage_row.setContentsMargins(0, 0, 0, 0)
+        context_usage_row.setSpacing(10)
+        self.context_usage_toggle_label = QLabel("Show usage for this mode")
+        context_usage_row.addWidget(self.context_usage_toggle_label, 1, Qt.AlignmentFlag.AlignVCenter)
+        self.context_usage_checkbox = SwitchPill(self.context_usage_enabled_for_mode())
+        self.context_usage_checkbox.setChecked(self.context_usage_enabled_for_mode())
+        self.context_usage_checkbox.toggled.connect(self.set_context_usage_enabled_for_active_mode)
+        context_usage_row.addWidget(
+            self.context_usage_checkbox,
+            0,
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+        )
+        context_usage_section_layout.addLayout(context_usage_row)
+        self.context_usage_detail = QLabel("")
+        self.context_usage_detail.setObjectName("subtleLabel")
+        self.context_usage_detail.setWordWrap(True)
+        context_usage_section_layout.addWidget(self.context_usage_detail)
+        composer_body_layout.addWidget(self.context_usage_section)
+
         self.reasoning_section = QWidget()
         reasoning_section_layout = QVBoxLayout(self.reasoning_section)
         reasoning_section_layout.setContentsMargins(0, 0, 0, 0)
@@ -1265,6 +1353,15 @@ class AgentChatWindow(
             self.composer.set_max_lines(self.composer_max_lines)
         self.save_config()
 
+    def context_usage_enabled_for_mode(self, mode=None):
+        mode = normalize_mode(mode or self.active_mode)
+        return bool(self.context_usage_enabled_by_mode.get(mode, mode == MODE_AGENT))
+
+    def set_context_usage_enabled_for_active_mode(self, enabled):
+        self.context_usage_enabled_by_mode[self.active_mode] = bool(enabled)
+        self.save_config()
+        self.refresh_chat_header()
+
     def refresh_rendering_ui(self):
         if hasattr(self, "debounce_checkbox"):
             self.debounce_checkbox.blockSignals(True)
@@ -1277,12 +1374,14 @@ class AgentChatWindow(
             self.debounce_interval_spin.blockSignals(False)
         if hasattr(self, "assistant_rendering_section"):
             self.assistant_rendering_section.setVisible(self.assistant_rendering_enabled)
+        self.refresh_chat_header()
 
     def set_active_mode(self, mode):
         mode = normalize_mode(mode)
         if self.active_mode == mode:
             self.refresh_mode_ui()
             self.refresh_terminal_permission_ui()
+            self.refresh_chat_header()
             return
         if self.worker is not None and self.worker.isRunning():
             self.set_status_message("Wait for the current response before changing mode.")
@@ -1296,6 +1395,7 @@ class AgentChatWindow(
         self.refresh_mode_ui()
         self.refresh_terminal_permission_ui()
         self.refresh_character_ui()
+        self.refresh_chat_header()
         self.update_empty_state()
         self.update_send_availability()
         if mode == MODE_AGENT:
@@ -1342,6 +1442,7 @@ class AgentChatWindow(
             self.terminal_permission_button.setEnabled(effective_terminal_enabled)
         if hasattr(self, "composer"):
             self.composer.setPlaceholderText(self.composer_placeholder())
+        self.refresh_chat_header()
 
     def composer_placeholder(self):
         if self.active_mode == MODE_AGENT:

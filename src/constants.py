@@ -41,6 +41,7 @@ CONFIG_PATH = user_config_path()
 LEGACY_CONFIG_PATH = resource_path("config.json")
 ASSETS_DIR = resource_path("assets")
 APP_LOGO_PATH = ASSETS_DIR / "app_logo.png"
+ANIM_LOADING_SMALL_PATH = ASSETS_DIR / "anim_loading_small.gif"
 PIN_ICON_PATH = ASSETS_DIR / "ic_pin.svg"
 ARROW_UP_ICON_PATH = ASSETS_DIR / "ic_arrow_up.svg"
 ARROW_DOWN_ICON_PATH = ASSETS_DIR / "ic_arrow_down.svg"

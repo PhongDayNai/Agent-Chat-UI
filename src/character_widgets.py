@@ -37,6 +37,8 @@ def colored_svg_data(path, color: str, fill_color: str = "none") -> QByteArray:
         svg = ""
     svg = svg.replace("currentColor", color)
     svg = svg.replace("#f2f3f5", color)
+    svg = svg.replace("#000000", color)
+    svg = svg.replace("#000", color)
     if fill_color != "none":
         svg = svg.replace('fill="none"', f'fill="{fill_color}"')
     data = QByteArray(svg.encode("utf-8"))

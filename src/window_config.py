@@ -100,6 +100,11 @@ class ConfigMixin:
                 "pin_panel": False,
                 "advanced_controls_expanded": True,
                 "chat_controls_expanded": True,
+                "context_usage": {
+                    MODE_CHAT: False,
+                    MODE_CHARACTER: False,
+                    MODE_AGENT: True,
+                },
                 "composer_max_lines": DEFAULT_COMPOSER_MAX_LINES,
                 "character_card_ratio": DEFAULT_CHARACTER_CARD_RATIO,
             },
@@ -169,6 +174,7 @@ class ConfigMixin:
                 "pin_panel": self.sidebar_pinned,
                 "advanced_controls_expanded": self.advanced_controls_config_expanded,
                 "chat_controls_expanded": self.composer_expanded,
+                "context_usage": self.context_usage_enabled_by_mode,
                 "composer_max_lines": (
                     self.composer_max_lines_spin.value()
                     if hasattr(self, "composer_max_lines_spin")
@@ -274,6 +280,12 @@ class ConfigMixin:
                     "composer_max_lines",
                     payload.get("composer_max_lines", default_config["ui"]["composer_max_lines"]),
                 ),
+                "context_usage": self.normalize_context_usage_config(
+                    ui_payload.get(
+                        "context_usage",
+                        default_config["ui"]["context_usage"],
+                    )
+                ),
                 "character_card_ratio": self.normalize_character_card_ratio(
                     ui_payload.get(
                         "character_card_ratio",
@@ -286,6 +298,19 @@ class ConfigMixin:
     def normalize_character_card_ratio(self, value):
         ratio = str(value or DEFAULT_CHARACTER_CARD_RATIO).strip()
         return ratio if ratio in CHARACTER_CARD_RATIOS else DEFAULT_CHARACTER_CARD_RATIO
+
+    def normalize_context_usage_config(self, value):
+        defaults = {
+            MODE_CHAT: False,
+            MODE_CHARACTER: False,
+            MODE_AGENT: True,
+        }
+        if not isinstance(value, dict):
+            return defaults
+        return {
+            mode: bool(value.get(mode, enabled))
+            for mode, enabled in defaults.items()
+        }
 
     def normalize_api_keys_config(self, payload, default_config):
         items = []
