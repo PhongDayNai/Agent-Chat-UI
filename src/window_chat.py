@@ -263,7 +263,7 @@ class ChatFlowMixin:
             top_k=self.top_k_spin.value(),
             api_key=self.current_api_key_value(),
             agent_terminal_enabled=self.is_terminal_enabled_for_request(),
-            agent_terminal_permission=self.agent_terminal_permission,
+            agent_terminal_permission=self.effective_terminal_permission_for_request(),
             default_permissions=self.default_permissions,
             terminal_cwd=str(self.workspace_path),
         )
@@ -712,6 +712,8 @@ class ChatFlowMixin:
                 replace_terminal_command_tags(full_response)
             ).strip()
             self.history.append({"role": "assistant", "content": clean_response or full_response})
+            if self.active_mode == MODE_CHARACTER:
+                self.increment_active_character_message_count()
             self.status_badge.setText("Ready")
             self.status_detail.setText("Response completed.")
         elif stopped:

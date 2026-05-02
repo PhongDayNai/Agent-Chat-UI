@@ -34,6 +34,7 @@ from constants import (
 )
 from characters import (
     normalize_character_profiles,
+    normalize_character_sort_mode,
 )
 from character_image_cache import CharacterImageCache
 from character_theme import CHARACTER_MODE_STYLE_PATCH
@@ -116,6 +117,7 @@ class AgentChatWindow(
         self.character_card_ratio = self.normalize_character_card_ratio(
             ui_config.get("character_card_ratio", DEFAULT_CHARACTER_CARD_RATIO)
         )
+        self.character_sort_mode = normalize_character_sort_mode(ui_config.get("character_sort_mode"))
 
         self.server_enabled = bool(server_config.get("enabled", True))
         configured_base_url = self.normalize_base_url(server_config.get("base_url", ""))

@@ -34,6 +34,7 @@ from characters import (
     DEFAULT_CHARACTER_PROFILES, character_avatar_url, character_poster_url,
     filter_characters, get_active_character, get_effective_character_capabilities,
     is_character_favorite, normalize_character, normalize_character_profiles,
+    normalize_character_sort_mode,
     set_character_capability, set_character_favorite, sort_characters,
 )
 from character_widgets import CharacterAccessPanel, CharacterSidebarHeroCard, render_svg_pixmap
@@ -107,6 +108,7 @@ class ConfigMixin:
                 },
                 "composer_max_lines": DEFAULT_COMPOSER_MAX_LINES,
                 "character_card_ratio": DEFAULT_CHARACTER_CARD_RATIO,
+                "character_sort_mode": "name_asc",
             },
         }
         config_path = CONFIG_PATH if CONFIG_PATH.exists() else LEGACY_CONFIG_PATH
@@ -181,6 +183,7 @@ class ConfigMixin:
                     else self.composer_max_lines
                 ),
                 "character_card_ratio": self.character_card_ratio,
+                "character_sort_mode": self.character_sort_mode,
             },
         }
         try:
@@ -290,6 +293,12 @@ class ConfigMixin:
                     ui_payload.get(
                         "character_card_ratio",
                         default_config["ui"]["character_card_ratio"],
+                    )
+                ),
+                "character_sort_mode": normalize_character_sort_mode(
+                    ui_payload.get(
+                        "character_sort_mode",
+                        default_config["ui"]["character_sort_mode"],
                     )
                 ),
             },

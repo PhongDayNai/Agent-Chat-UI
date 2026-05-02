@@ -22,6 +22,18 @@ DEFAULT_CHARACTER_PROFILES = {
     "local_state": {},
 }
 
+CHARACTER_SORT_NAME_ASC = "name_asc"
+CHARACTER_SORT_NAME_DESC = "name_desc"
+CHARACTER_SORT_FAVORITE = "favorite"
+CHARACTER_SORT_MESSAGE_COUNT = "message_count"
+DEFAULT_CHARACTER_SORT_MODE = CHARACTER_SORT_NAME_ASC
+CHARACTER_SORT_LABELS = {
+    CHARACTER_SORT_NAME_ASC: "A – Z",
+    CHARACTER_SORT_NAME_DESC: "Z – A",
+    CHARACTER_SORT_FAVORITE: "Favourite",
+    CHARACTER_SORT_MESSAGE_COUNT: "Message count",
+}
+
 
 def normalize_capabilities(value):
     caps = dict(DEFAULT_CHARACTER_CAPABILITIES)
@@ -36,6 +48,14 @@ def normalize_capabilities(value):
 
 def _clean_text(value, default=""):
     return str(value if value is not None else default).strip()
+
+
+def _clean_non_negative_int(value, default=0):
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return default
+    return max(0, number)
 
 
 def _clean_tags(value):
@@ -67,6 +87,7 @@ def normalize_character(raw):
         "system_prompt": _clean_text(raw.get("system_prompt")),
         "greeting": _clean_text(raw.get("greeting")),
         "tags": _clean_tags(raw.get("tags", [])),
+        "message_count": _clean_non_negative_int(raw.get("message_count"), 0),
         "version": raw.get("version") or 1,
         "default_capabilities": normalize_capabilities(raw.get("default_capabilities")),
     }
@@ -177,18 +198,46 @@ def get_effective_character_capabilities(character, local_state):
     return caps
 
 
-def sort_characters(items, local_state):
+def normalize_character_sort_mode(value):
+    value = _clean_text(value)
+    if value in CHARACTER_SORT_LABELS:
+        return value
+    return DEFAULT_CHARACTER_SORT_MODE
+
+
+def character_sort_label(value):
+    return CHARACTER_SORT_LABELS[normalize_character_sort_mode(value)]
+
+
+def sort_characters(items, local_state=None, sort_mode=DEFAULT_CHARACTER_SORT_MODE):
     local_state = local_state if isinstance(local_state, dict) else {}
-    return sorted(
-        items or [],
-        key=lambda item: (
-            not local_state.get(item.get("id"), {}).get("favorite", False),
-            item.get("name", "").lower(),
-        ),
-    )
+    sort_mode = normalize_character_sort_mode(sort_mode)
+
+    if sort_mode == CHARACTER_SORT_NAME_DESC:
+        return sorted(items or [], key=lambda item: item.get("name", "").lower(), reverse=True)
+
+    if sort_mode == CHARACTER_SORT_FAVORITE:
+        return sorted(
+            items or [],
+            key=lambda item: (
+                not local_state.get(item.get("id"), {}).get("favorite", False),
+                item.get("name", "").lower(),
+            ),
+        )
+
+    if sort_mode == CHARACTER_SORT_MESSAGE_COUNT:
+        return sorted(
+            items or [],
+            key=lambda item: (
+                -_clean_non_negative_int(item.get("message_count"), 0),
+                item.get("name", "").lower(),
+            ),
+        )
+
+    return sorted(items or [], key=lambda item: item.get("name", "").lower())
 
 
-def filter_characters(items, local_state=None, query="", favorites_only=False):
+def filter_characters(items, local_state=None, query="", favorites_only=False, sort_mode=DEFAULT_CHARACTER_SORT_MODE):
     local_state = local_state if isinstance(local_state, dict) else {}
     query = _clean_text(query).lower()
     result = []
@@ -215,7 +264,7 @@ def filter_characters(items, local_state=None, query="", favorites_only=False):
 
         result.append(item)
 
-    return sort_characters(result, local_state)
+    return sort_characters(result, local_state, sort_mode)
 
 
 def set_character_favorite(character_profiles, character_id, favorite):

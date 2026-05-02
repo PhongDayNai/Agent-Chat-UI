@@ -173,6 +173,16 @@ class TerminalPermissionMixin:
             return "Full access"
         return "Default permissions"
 
+    def effective_terminal_permission_for_request(self):
+        if self.active_mode == MODE_CHARACTER:
+            return TERMINAL_PERMISSION_DEFAULT
+        return self.agent_terminal_permission
+
+    def effective_terminal_permission_label(self):
+        if self.effective_terminal_permission_for_request() == TERMINAL_PERMISSION_FULL_ACCESS:
+            return "Full access"
+        return "Default permissions"
+
     def show_terminal_permission_menu(self):
         if not hasattr(self, "terminal_permission_menu"):
             return
@@ -190,6 +200,8 @@ class TerminalPermissionMixin:
             "Default permissions",
             TERMINAL_PERMISSION_DEFAULT,
         )
+        if self.active_mode == MODE_CHARACTER:
+            return
         self.add_terminal_permission_menu_item(
             self.terminal_permission_menu,
             "Full access",
@@ -205,6 +217,8 @@ class TerminalPermissionMixin:
             "Default permissions",
             TERMINAL_PERMISSION_DEFAULT,
         )
+        if self.active_mode == MODE_CHARACTER:
+            return
         self.add_terminal_permission_menu_item(
             self.side_terminal_permission_menu,
             "Full access",
@@ -217,7 +231,7 @@ class TerminalPermissionMixin:
         button.setObjectName("terminalPermissionMenuItem")
         button.setIcon(self.terminal_permission_icon(permission))
         button.setProperty("fullAccess", permission == TERMINAL_PERMISSION_FULL_ACCESS)
-        button.setProperty("selected", self.agent_terminal_permission == permission)
+        button.setProperty("selected", self.effective_terminal_permission_for_request() == permission)
         button.clicked.connect(
             lambda _checked=False, value=permission: self.select_terminal_permission_from_menu(value)
         )
@@ -225,6 +239,13 @@ class TerminalPermissionMixin:
         menu.addAction(action)
 
     def select_terminal_permission_from_menu(self, permission):
+        if self.active_mode == MODE_CHARACTER:
+            self.refresh_terminal_permission_ui()
+            if hasattr(self, "terminal_permission_menu"):
+                self.terminal_permission_menu.close()
+            if hasattr(self, "side_terminal_permission_menu"):
+                self.side_terminal_permission_menu.close()
+            return
         self.set_agent_terminal_permission(permission)
         if hasattr(self, "terminal_permission_menu"):
             self.terminal_permission_menu.close()
@@ -232,16 +253,17 @@ class TerminalPermissionMixin:
             self.side_terminal_permission_menu.close()
 
     def refresh_terminal_permission_ui(self):
-        label = self.agent_terminal_permission_label()
+        label = self.effective_terminal_permission_label()
+        permission = self.effective_terminal_permission_for_request()
         effective_terminal_enabled = self.is_terminal_enabled_for_request()
         if hasattr(self, "terminal_permission_button"):
             suffix = " enabled" if effective_terminal_enabled else " disabled"
             self.terminal_permission_button.setText(label)
-            self.terminal_permission_button.setIcon(self.terminal_permission_icon(self.agent_terminal_permission))
+            self.terminal_permission_button.setIcon(self.terminal_permission_icon(permission))
             self.terminal_permission_button.setToolTip(f"Terminal access is{suffix}.")
             self.terminal_permission_button.setProperty(
                 "fullAccess",
-                self.agent_terminal_permission == TERMINAL_PERMISSION_FULL_ACCESS,
+                permission == TERMINAL_PERMISSION_FULL_ACCESS,
             )
             self.terminal_permission_button.style().unpolish(self.terminal_permission_button)
             self.terminal_permission_button.style().polish(self.terminal_permission_button)
@@ -252,10 +274,10 @@ class TerminalPermissionMixin:
             self.agent_terminal_checkbox.blockSignals(False)
         if hasattr(self, "side_terminal_permission_button"):
             self.side_terminal_permission_button.setText(label)
-            self.side_terminal_permission_button.setIcon(self.terminal_permission_side_icon(self.agent_terminal_permission))
+            self.side_terminal_permission_button.setIcon(self.terminal_permission_side_icon(permission))
             self.side_terminal_permission_button.setProperty(
                 "fullAccess",
-                self.agent_terminal_permission == TERMINAL_PERMISSION_FULL_ACCESS,
+                permission == TERMINAL_PERMISSION_FULL_ACCESS,
             )
             self.side_terminal_permission_button.style().unpolish(self.side_terminal_permission_button)
             self.side_terminal_permission_button.style().polish(self.side_terminal_permission_button)

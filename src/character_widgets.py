@@ -8,7 +8,7 @@ from PyQt6.QtSvg import QSvgRenderer
 from PyQt6.QtWidgets import QFrame, QGraphicsDropShadowEffect, QHBoxLayout, QLabel, QSizePolicy, QVBoxLayout, QWidget
 
 from characters import character_accent, character_role, should_render_full_poster
-from constants import FILE_ICON_PATH, LINK_ICON_PATH, STAR_ICON_PATH, TERMINAL_ICON_PATH
+from constants import FILE_ICON_PATH, LINK_ICON_PATH, STAR_ICON_PATH, TERMINAL_ICON_PATH, TICK_ICON_PATH
 
 
 def _qcolor(hex_value: str, alpha: int | None = None) -> QColor:
@@ -37,6 +37,7 @@ def colored_svg_data(path, color: str, fill_color: str = "none") -> QByteArray:
         svg = ""
     svg = svg.replace("currentColor", color)
     svg = svg.replace("#f2f3f5", color)
+    svg = svg.replace("#0C0310", color)
     svg = svg.replace("#000000", color)
     svg = svg.replace("#000", color)
     if fill_color != "none":
@@ -233,7 +234,8 @@ class CharacterPosterCard(QFrame):
         self.is_selected = bool(selected)
         self.hovered = False
         self.focused = False
-        self.radius = 22
+        self.radius = 11
+        self.layout_mode = "grid"
         self.render_full_poster = should_render_full_poster(self.character) if render_full_poster is None else bool(render_full_poster)
         self.setObjectName("characterPosterCard")
         self.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -257,6 +259,10 @@ class CharacterPosterCard(QFrame):
 
     def set_shadow_mode(self, mode: str):
         self.apply_shadow(mode)
+
+    def set_layout_mode(self, mode: str):
+        self.layout_mode = "list" if mode == "list" else "grid"
+        self.update()
 
     def set_character(self, character: dict, pixmap=None, selected=None, render_full_poster=None):
         self.character = character or {}
@@ -310,6 +316,10 @@ class CharacterPosterCard(QFrame):
 
         rect = self.rect().adjusted(1, 1, -1, -1)
         radius = self.radius
+        if self.layout_mode == "list":
+            self.paint_list_card(painter, rect, radius)
+            return
+
         path = QPainterPath()
         path.addRoundedRect(QRectF(rect), radius, radius)
 
@@ -331,6 +341,71 @@ class CharacterPosterCard(QFrame):
         self.paint_border(painter, rect, radius)
         self.paint_selected_badge(painter, rect)
         self.paint_text_overlay(painter, rect)
+
+    def paint_list_card(self, painter, rect, radius):
+        path = QPainterPath()
+        path.addRoundedRect(QRectF(rect), radius, radius)
+
+        painter.save()
+        painter.setClipPath(path)
+        self.paint_background(painter, rect)
+
+        thumb_width = min(132, max(104, rect.height()))
+        thumb_rect = QRect(rect.left(), rect.top(), thumb_width, rect.height())
+        if not self.pixmap.isNull():
+            painter.drawPixmap(thumb_rect, cover_crop_pixmap(self.pixmap, thumb_rect.size(), focus_y=0.40))
+        else:
+            self.paint_placeholder(painter, thumb_rect)
+
+        thumb_fade = QLinearGradient(thumb_rect.left(), thumb_rect.top(), thumb_rect.right(), thumb_rect.top())
+        thumb_fade.setColorAt(0.00, QColor(7, 11, 20, 0))
+        thumb_fade.setColorAt(0.82, QColor(7, 11, 20, 20))
+        thumb_fade.setColorAt(1.00, QColor(7, 11, 20, 178))
+        painter.fillRect(thumb_rect, thumb_fade)
+        painter.restore()
+
+        self.paint_border(painter, rect, radius)
+        self.paint_selected_badge(painter, rect)
+        self.paint_list_text(painter, rect, thumb_rect.right() + 18)
+
+    def paint_list_text(self, painter, rect, left):
+        name = self.character.get("name", "Character")
+        role = character_role(self.character)
+        tags = self.character.get("tags", [])[:3]
+        accent = _qcolor(character_accent(self.character))
+        right = rect.right() - (70 if self.is_selected else 18)
+        top = rect.top() + 16
+
+        font = painter.font()
+        font.setPointSize(18)
+        font.setBold(True)
+        painter.setFont(font)
+        painter.setPen(QColor("#ffffff"))
+        painter.drawText(
+            QRect(left, top, max(0, right - left), 32),
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+            name,
+        )
+
+        font.setPointSize(9)
+        font.setBold(True)
+        painter.setFont(font)
+        metrics = painter.fontMetrics()
+        role_width = min(metrics.horizontalAdvance(role) + 22, max(0, right - left))
+        role_rect = QRect(left, top + 38, role_width, 28)
+        role_bg = QLinearGradient(role_rect.left(), role_rect.top(), role_rect.right(), role_rect.top())
+        role_start = QColor(accent)
+        role_start.setAlpha(92)
+        role_end = QColor(accent)
+        role_end.setAlpha(22)
+        role_bg.setColorAt(0.0, role_start)
+        role_bg.setColorAt(1.0, role_end)
+        painter.setBrush(role_bg)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.drawRoundedRect(QRectF(role_rect), 9, 9)
+        painter.setPen(accent.lighter(118))
+        painter.drawText(role_rect, Qt.AlignmentFlag.AlignCenter, role)
+        self.paint_tag_chips(painter, tags, left, right, top + 76)
 
     def paint_background(self, painter, rect):
         bg = QLinearGradient(QPointF(rect.topLeft()), QPointF(rect.bottomRight()))
@@ -412,21 +487,17 @@ class CharacterPosterCard(QFrame):
         painter.setBrush(QColor("#7c6cff"))
         painter.setPen(Qt.PenStyle.NoPen)
         painter.drawEllipse(badge_rect)
-        painter.setPen(QColor("#ffffff"))
-        font = painter.font()
-        font.setPointSize(15)
-        font.setBold(True)
-        painter.setFont(font)
-        painter.drawText(badge_rect, Qt.AlignmentFlag.AlignCenter, "✓")
+        icon_rect = QRectF(badge_rect).adjusted(10, 10, -10, -10)
+        draw_svg_icon(painter, TICK_ICON_PATH, icon_rect, "#ffffff")
 
     def paint_text_overlay(self, painter, rect):
         name = self.character.get("name", "Character")
         role = character_role(self.character)
         tags = self.character.get("tags", [])[:3]
         accent = _qcolor(character_accent(self.character))
-        left = rect.left() + 26
-        right = rect.right() - 24
-        bottom = rect.bottom() - 24
+        left = rect.left() + 18
+        right = rect.right() - 18
+        bottom = rect.bottom() - 9
 
         font = painter.font()
         font.setPointSize(20)
@@ -439,16 +510,19 @@ class CharacterPosterCard(QFrame):
         font.setBold(True)
         painter.setFont(font)
         metrics = painter.fontMetrics()
-        role_width = min(metrics.horizontalAdvance(role) + 26, right - left)
+        role_width = min(metrics.horizontalAdvance(role) + 22, right - left)
         role_rect = QRect(left, bottom - 72, role_width, 30)
-        role_bg = QColor(accent)
-        role_bg.setAlpha(70)
-        role_border = QColor(accent)
-        role_border.setAlpha(105)
+        role_bg = QLinearGradient(role_rect.left(), role_rect.top(), role_rect.right(), role_rect.top())
+        role_start = QColor(accent)
+        role_start.setAlpha(92)
+        role_end = QColor(accent)
+        role_end.setAlpha(22)
+        role_bg.setColorAt(0.0, role_start)
+        role_bg.setColorAt(1.0, role_end)
         painter.setBrush(role_bg)
-        painter.setPen(QPen(role_border, 1))
+        painter.setPen(Qt.PenStyle.NoPen)
         painter.drawRoundedRect(QRectF(role_rect), 9, 9)
-        painter.setPen(accent.lighter(135))
+        painter.setPen(accent.lighter(118))
         painter.drawText(role_rect, Qt.AlignmentFlag.AlignCenter, role)
         self.paint_tag_chips(painter, tags, left, right, bottom - 32)
 
@@ -463,13 +537,13 @@ class CharacterPosterCard(QFrame):
             label = str(tag).strip()
             if not label:
                 continue
-            width = metrics.horizontalAdvance(label) + 20
+            width = metrics.horizontalAdvance(label) + 18
             if x + width > right:
                 break
             tag_rect = QRect(x, y, width, 24)
             painter.setBrush(QColor(35, 42, 50, 166))
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.drawRoundedRect(QRectF(tag_rect), 12, 12)
+            painter.setPen(QPen(QColor(255, 255, 255, 51), 1))
+            painter.drawRoundedRect(QRectF(tag_rect), 9, 9)
             painter.setPen(QColor("#e5e7eb"))
             painter.drawText(tag_rect, Qt.AlignmentFlag.AlignCenter, label)
             x += width + 6

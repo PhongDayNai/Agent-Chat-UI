@@ -14,7 +14,7 @@ import requests
 from PyQt6.QtCore import QByteArray, QBuffer, QEasingCurve, QEvent, QIODevice, QPoint, QPropertyAnimation, QRectF, QSize, QTimer, QUrl, Qt
 from PyQt6.QtGui import QDesktopServices, QFontMetrics, QGuiApplication, QIcon, QImage, QPainter, QPixmap, QTransform
 from PyQt6.QtSvg import QSvgRenderer
-from PyQt6.QtWidgets import QFileDialog, QFrame, QGridLayout, QHBoxLayout, QLabel, QMenu, QMessageBox, QPushButton, QScrollArea, QVBoxLayout, QWidget, QWidgetAction
+from PyQt6.QtWidgets import QFileDialog, QButtonGroup, QFrame, QGridLayout, QHBoxLayout, QLabel, QMenu, QMessageBox, QPushButton, QScrollArea, QVBoxLayout, QWidget, QWidgetAction
 
 try:
     from pypdf import PdfReader
@@ -22,8 +22,8 @@ except ImportError:
     PdfReader = None
 
 from constants import (
-    APP_WORKSPACE, ARROW_DOWN_ICON_PATH, CONFIG_PATH, DEFAULT_PERMISSIONS_ICON_PATH,
-    DEFAULT_SERVER_BASE_URL, FULL_ACCESS_ICON_PATH, LEGACY_CONFIG_PATH,
+    APP_WORKSPACE, ARROW_DOWN_ICON_PATH, CLOSE_ICON_PATH, CONFIG_PATH, DEFAULT_PERMISSIONS_ICON_PATH,
+    DEFAULT_SERVER_BASE_URL, FULL_ACCESS_ICON_PATH, LAYOUT_GRID_ICON_PATH, LAYOUT_LIST_ICON_PATH, LEGACY_CONFIG_PATH,
     MAX_ATTACHMENT_TEXT_CHARS, MAX_URL_DOWNLOAD_BYTES, MAX_URLS_PER_MESSAGE,
     MAX_URL_TEXT_CHARS, TEXT_PREVIEW_SUFFIXES, TRAILING_URL_PUNCTUATION,
     URL_FETCH_TIMEOUT, URL_RE, agent_terminal_prompt,
@@ -31,9 +31,11 @@ from constants import (
 from html_utils import HtmlTextExtractor
 from markdown_utils import normalize_terminal_fences, replace_terminal_command_tags
 from characters import (
-    DEFAULT_CHARACTER_PROFILES, character_avatar_url, character_poster_url,
+    CHARACTER_SORT_LABELS, DEFAULT_CHARACTER_PROFILES, character_avatar_url,
+    character_poster_url, character_sort_label,
     filter_characters, get_active_character, get_effective_character_capabilities,
     is_character_favorite, normalize_character, normalize_character_profiles,
+    normalize_character_sort_mode,
     set_character_capability, set_character_favorite, sort_characters,
 )
 from character_widgets import CharacterAccessPanel, CharacterPosterCard, CharacterSidebarHeroCard, render_svg_pixmap
@@ -60,44 +62,157 @@ class CharacterMixin:
         self.character_overlay = QFrame(self.content_frame)
         self.character_overlay.setObjectName("characterOverlay")
         self.character_overlay.hide()
+        self.character_overlay_layout_mode = "grid"
         overlay_layout = QVBoxLayout(self.character_overlay)
-        overlay_layout.setContentsMargins(30, 28, 30, 28)
+        overlay_layout.setContentsMargins(30, 24, 24, 0)
         overlay_layout.setSpacing(22)
 
         header = QHBoxLayout()
         header.setSpacing(12)
         title_column = QVBoxLayout()
         title_column.setSpacing(4)
-        title = QLabel("Choose your character")
+        title = QLabel("Change character")
         title.setObjectName("overlayTitle")
         title_column.addWidget(title)
-        subtitle = QLabel("Pick a persona for this chat.")
+        subtitle = QLabel("Choose who you want to chat with")
         subtitle.setObjectName("overlaySubtitle")
         title_column.addWidget(subtitle)
         header.addLayout(title_column)
         header.addStretch()
-        self.character_sort_button = QPushButton("A-Z")
+        self.character_sort_button = QPushButton(character_sort_label(getattr(self, "character_sort_mode", "name_asc")))
         self.character_sort_button.setObjectName("characterSortButton")
-        self.character_sort_button.setToolTip("Characters are sorted by favorites and name")
-        self.character_sort_button.setEnabled(False)
-        header.addWidget(self.character_sort_button)
-        close_button = QPushButton("×")
+        self.character_sort_button.setFixedSize(112, 40)
+        self.character_sort_button.setIcon(QIcon(render_svg_pixmap(ARROW_DOWN_ICON_PATH, QSize(13, 13), "#9aa1aa")))
+        self.character_sort_button.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        self.character_sort_button.setToolTip("Sort characters")
+        self.character_sort_menu = QMenu(self.character_sort_button)
+        self.character_sort_menu.setObjectName("characterSortMenu")
+        self.character_sort_actions = {}
+        for sort_mode, label in CHARACTER_SORT_LABELS.items():
+            action = self.character_sort_menu.addAction(label)
+            action.setCheckable(True)
+            action.triggered.connect(
+                lambda _checked=False, value=sort_mode: self.set_character_sort_mode(value)
+            )
+            self.character_sort_actions[sort_mode] = action
+        self.character_sort_button.clicked.connect(self.show_character_sort_menu)
+        self.refresh_character_sort_ui()
+        header.addWidget(self.character_sort_button, 0, Qt.AlignmentFlag.AlignTop)
+
+        layout_toggle = QFrame()
+        layout_toggle.setObjectName("characterLayoutToggle")
+        layout_toggle.setFixedSize(76, 40)
+        layout_toggle_layout = QHBoxLayout(layout_toggle)
+        layout_toggle_layout.setContentsMargins(5, 5, 5, 5)
+        layout_toggle_layout.setSpacing(4)
+
+        self.character_layout_group = QButtonGroup(self)
+        self.character_layout_group.setExclusive(True)
+
+        self.character_grid_button = QPushButton("")
+        self.character_grid_button.setObjectName("characterLayoutButton")
+        self.character_grid_button.setCheckable(True)
+        self.character_grid_button.setChecked(True)
+        self.character_grid_button.setFixedSize(30, 30)
+        self.character_grid_button.setToolTip("Grid view")
+        self.character_grid_button.setIcon(QIcon(render_svg_pixmap(LAYOUT_GRID_ICON_PATH, QSize(18, 18), "#8b7cff")))
+        self.character_layout_group.addButton(self.character_grid_button)
+        layout_toggle_layout.addWidget(self.character_grid_button)
+
+        self.character_list_button = QPushButton("")
+        self.character_list_button.setObjectName("characterLayoutButton")
+        self.character_list_button.setCheckable(True)
+        self.character_list_button.setFixedSize(30, 30)
+        self.character_list_button.setToolTip("List view")
+        self.character_list_button.setIcon(QIcon(render_svg_pixmap(LAYOUT_LIST_ICON_PATH, QSize(18, 18), "#9aa1aa")))
+        self.character_layout_group.addButton(self.character_list_button)
+        layout_toggle_layout.addWidget(self.character_list_button)
+        self.character_grid_button.clicked.connect(lambda: self.set_character_overlay_layout("grid"))
+        self.character_list_button.clicked.connect(lambda: self.set_character_overlay_layout("list"))
+        header.addWidget(layout_toggle, 0, Qt.AlignmentFlag.AlignTop)
+
+        close_button = QPushButton("")
         close_button.setObjectName("overlayCloseButton")
+        close_button.setFixedSize(40, 40)
+        close_button.setIcon(QIcon(render_svg_pixmap(CLOSE_ICON_PATH, QSize(17, 17), "#c5c9d0")))
+        close_button.setToolTip("Close")
         close_button.clicked.connect(self.hide_character_overlay)
-        header.addWidget(close_button)
+        header.addWidget(close_button, 0, Qt.AlignmentFlag.AlignTop)
         overlay_layout.addLayout(header)
 
         self.character_overlay_scroll = QScrollArea()
         self.character_overlay_scroll.setObjectName("characterOverlayScroll")
         self.character_overlay_scroll.setWidgetResizable(True)
         self.character_overlay_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.character_overlay_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.character_overlay_body = QWidget()
         self.character_overlay_grid = QGridLayout(self.character_overlay_body)
         self.character_overlay_grid.setContentsMargins(0, 8, 14, 0)
         self.character_overlay_grid.setHorizontalSpacing(28)
         self.character_overlay_grid.setVerticalSpacing(30)
+        self.character_overlay_grid.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
         self.character_overlay_scroll.setWidget(self.character_overlay_body)
         overlay_layout.addWidget(self.character_overlay_scroll, 1)
+
+    def refresh_character_sort_ui(self):
+        sort_mode = normalize_character_sort_mode(getattr(self, "character_sort_mode", "name_asc"))
+        self.character_sort_mode = sort_mode
+        if hasattr(self, "character_sort_button"):
+            self.character_sort_button.setText(self.character_sort_button_label(sort_mode))
+        for mode, action in getattr(self, "character_sort_actions", {}).items():
+            action.setChecked(mode == sort_mode)
+
+    def character_sort_button_label(self, sort_mode):
+        label = character_sort_label(sort_mode)
+        if sort_mode == "message_count":
+            return "Messages"
+        return label
+
+    def show_character_sort_menu(self):
+        if not hasattr(self, "character_sort_menu"):
+            return
+        self.refresh_character_sort_ui()
+        self.character_sort_menu.setMinimumWidth(178)
+        self.character_sort_menu.exec(
+            self.character_sort_button.mapToGlobal(self.character_sort_button.rect().bottomLeft())
+        )
+
+    def set_character_sort_mode(self, sort_mode):
+        sort_mode = normalize_character_sort_mode(sort_mode)
+        if getattr(self, "character_sort_mode", "name_asc") == sort_mode:
+            self.refresh_character_sort_ui()
+            return
+        self.character_sort_mode = sort_mode
+        self.refresh_character_sort_ui()
+        self.save_config()
+        if hasattr(self, "character_overlay") and self.character_overlay.isVisible():
+            self.populate_character_overlay()
+
+    def set_character_overlay_layout(self, mode):
+        mode = "list" if mode == "list" else "grid"
+        if getattr(self, "character_overlay_layout_mode", "grid") == mode:
+            self.refresh_character_layout_buttons()
+            return
+        self.character_overlay_layout_mode = mode
+        self.refresh_character_layout_buttons()
+        self.relayout_character_overlay_cards()
+
+    def refresh_character_layout_buttons(self):
+        mode = getattr(self, "character_overlay_layout_mode", "grid")
+        if hasattr(self, "character_grid_button"):
+            self.character_grid_button.setChecked(mode == "grid")
+            self.character_grid_button.setIcon(QIcon(render_svg_pixmap(
+                LAYOUT_GRID_ICON_PATH,
+                QSize(18, 18),
+                "#8b7cff" if mode == "grid" else "#9aa1aa",
+            )))
+        if hasattr(self, "character_list_button"):
+            self.character_list_button.setChecked(mode == "list")
+            self.character_list_button.setIcon(QIcon(render_svg_pixmap(
+                LAYOUT_LIST_ICON_PATH,
+                QSize(18, 18),
+                "#8b7cff" if mode == "list" else "#9aa1aa",
+            )))
 
     def refresh_character_ratio_menu(self):
         self.character_ratio_menu.clear()
@@ -129,30 +244,30 @@ class CharacterMixin:
             gap = self.character_overlay_grid.spacing()
         margins = self.character_overlay_grid.contentsMargins()
         available_width = self.character_overlay_scroll.viewport().width()
-        if hasattr(self, "sidebar"):
-            visible_width = self.width() - self.sidebar.width() - 120
-            available_width = min(available_width, max(0, visible_width))
         if available_width <= 0:
             available_width = max(0, self.character_overlay.width() - 44)
         available_width = max(0, available_width - margins.left() - margins.right())
+        if getattr(self, "character_overlay_layout_mode", "grid") == "list":
+            return max(CHARACTER_CARD_MIN_WIDTH, available_width)
         fit_width = (available_width - gap * max(0, columns - 1)) // max(1, columns)
         return max(CHARACTER_CARD_MIN_WIDTH, min(CHARACTER_CARD_MAX_WIDTH, fit_width))
 
     def character_overlay_card_height(self, card_width):
+        if getattr(self, "character_overlay_layout_mode", "grid") == "list":
+            return 118
         target_height = round(card_width * 1.45)
         return max(CHARACTER_CARD_MIN_HEIGHT, min(CHARACTER_CARD_MAX_HEIGHT, target_height))
 
     def character_overlay_column_count(self, item_count):
         if item_count <= 0:
             return 1
+        if getattr(self, "character_overlay_layout_mode", "grid") == "list":
+            return 1
         gap = self.character_overlay_grid.horizontalSpacing()
         if gap < 0:
             gap = self.character_overlay_grid.spacing()
         margins = self.character_overlay_grid.contentsMargins()
         available_width = self.character_overlay_scroll.viewport().width()
-        if hasattr(self, "sidebar"):
-            visible_width = self.width() - self.sidebar.width() - 120
-            available_width = min(available_width, max(0, visible_width))
         if available_width <= 0:
             available_width = max(0, self.character_overlay.width() - 44)
         available_width = max(0, available_width - margins.left() - margins.right())
@@ -166,12 +281,18 @@ class CharacterMixin:
         while self.character_overlay_grid.count():
             item = self.character_overlay_grid.takeAt(0)
             widget = item.widget()
-            if widget is not None:
+            if isinstance(widget, (CharacterPosterCard, CharacterChoiceCard)):
                 cards.append(widget)
+            elif widget is not None:
+                widget.deleteLater()
+        is_list = getattr(self, "character_overlay_layout_mode", "grid") == "list"
+        self.character_overlay_grid.setHorizontalSpacing(0 if is_list else 28)
+        self.character_overlay_grid.setVerticalSpacing(14 if is_list else 30)
         columns = self.character_overlay_column_count(len(cards))
         card_width = self.character_overlay_card_width(columns)
         for index, card in enumerate(cards):
             if isinstance(card, CharacterPosterCard):
+                card.set_layout_mode("list" if is_list else "grid")
                 card.setFixedWidth(card_width)
                 card.setFixedHeight(self.character_overlay_card_height(card_width))
             elif isinstance(card, CharacterChoiceCard):
@@ -179,12 +300,28 @@ class CharacterMixin:
                 card.update_card_height()
                 card.apply_rounded_mask()
                 card.position_content()
-            self.character_overlay_grid.addWidget(card, index // columns, index % columns)
+            self.character_overlay_grid.addWidget(
+                card,
+                index // columns,
+                index % columns,
+                Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft,
+            )
+        if cards:
+            bottom_space = QWidget()
+            bottom_space.setObjectName("characterOverlayBottomSpace")
+            bottom_space.setFixedHeight(28)
+            self.character_overlay_grid.addWidget(
+                bottom_space,
+                (len(cards) + columns - 1) // columns,
+                0,
+                1,
+                columns,
+            )
 
     def position_character_overlay(self):
         if not hasattr(self, "character_overlay"):
             return
-        margin = 18
+        margin = 0
         self.character_overlay.setGeometry(
             margin,
             margin,
@@ -210,15 +347,12 @@ class CharacterMixin:
             widget = item.widget()
             if widget is not None:
                 widget.deleteLater()
-        items = sort_characters(
-            self.character_profiles.get("items", []),
-            self.character_profiles.get("local_state", {}),
-        )
         items = filter_characters(
-            items,
+            self.character_profiles.get("items", []),
             local_state=self.character_profiles.get("local_state", {}),
             query=getattr(self, "character_search_query", ""),
             favorites_only=getattr(self, "character_show_favorites_only", False),
+            sort_mode=getattr(self, "character_sort_mode", "name_asc"),
         )
         active_id = self.character_profiles.get("active_character_id", "")
         for index, character in enumerate(items):
@@ -564,6 +698,7 @@ class CharacterMixin:
         items = sort_characters(
             self.character_profiles.get("items", []),
             self.character_profiles.get("local_state", {}),
+            getattr(self, "character_sort_mode", "name_asc"),
         )
         if not items:
             return
@@ -607,6 +742,22 @@ class CharacterMixin:
         set_character_favorite(self.character_profiles, character_id, not state.get("favorite", False))
         self.save_config()
         self.refresh_character_ui()
+        if hasattr(self, "character_overlay") and self.character_overlay.isVisible():
+            self.populate_character_overlay()
+
+    def increment_active_character_message_count(self):
+        character = self.active_character()
+        if not character:
+            return
+        try:
+            current_count = int(character.get("message_count", 0))
+        except (TypeError, ValueError):
+            current_count = 0
+        character["message_count"] = max(0, current_count) + 1
+        self.save_config()
+        self.refresh_character_ui()
+        if hasattr(self, "character_overlay") and self.character_overlay.isVisible():
+            self.populate_character_overlay()
 
     def set_active_character_capability(self, key, value):
         character = self.active_character()

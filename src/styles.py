@@ -439,35 +439,90 @@ QCheckBox#switchCheckBox::indicator:checked {
 }
 
 QFrame#characterOverlay {
-    background: rgba(6, 8, 12, 242);
-    border: 1px solid #252b34;
-    border-radius: 22px;
+    background: rgba(17, 19, 21, 246);
+    border: 1px solid #1d2023;
+    border-radius: 24px;
 }
 
 QLabel#overlayTitle {
-    color: #f8fafc;
-    font-size: 20pt;
+    color: #f4f5f7;
+    font-size: 19pt;
     font-weight: 800;
-    letter-spacing: -0.02em;
+}
+
+QLabel#overlaySubtitle {
+    color: #9ba2ad;
+    font-size: 11pt;
+    font-weight: 500;
+}
+
+QPushButton#characterSortButton {
+    min-width: 112px;
+    max-width: 112px;
+    min-height: 40px;
+    max-height: 40px;
+    padding: 0;
+    border-radius: 12px;
+    background: transparent;
+    border: 1px solid #1d2023;
+    color: #f1f3f6;
+    font-size: 10.5pt;
+    font-weight: 800;
+}
+
+QPushButton#characterSortButton:hover {
+    background: rgba(255, 255, 255, 18);
+    border-color: #1d2023;
+}
+
+QFrame#characterLayoutToggle {
+    min-width: 76px;
+    max-width: 76px;
+    min-height: 40px;
+    max-height: 40px;
+    background: transparent;
+    border: 1px solid #1d2023;
+    border-radius: 12px;
+}
+
+QPushButton#characterLayoutButton {
+    min-width: 30px;
+    max-width: 30px;
+    min-height: 30px;
+    max-height: 30px;
+    padding: 0;
+    border: none;
+    border-radius: 8px;
+    background: transparent;
+}
+
+QPushButton#characterLayoutButton:hover {
+    background: rgba(255, 255, 255, 18);
+}
+
+QPushButton#characterLayoutButton:checked {
+    background: rgba(255, 255, 255, 51);
+}
+
+QPushButton#characterLayoutButton:disabled {
+    background: transparent;
+    border: none;
 }
 
 QPushButton#overlayCloseButton {
-    min-width: 38px;
-    max-width: 38px;
-    min-height: 38px;
-    max-height: 38px;
+    min-width: 40px;
+    max-width: 40px;
+    min-height: 40px;
+    max-height: 40px;
     padding: 0;
-    border-radius: 13px;
-    background: #151922;
-    border: 1px solid #2b323d;
-    color: #e5e7eb;
-    font-size: 13pt;
-    font-weight: 800;
+    border-radius: 12px;
+    background: transparent;
+    border: 1px solid #1d2023;
 }
 
 QPushButton#overlayCloseButton:hover {
-    background: #1d2430;
-    border-color: #3b4554;
+    background: rgba(255, 255, 255, 18);
+    border-color: #1d2023;
 }
 
 QPushButton#overlayRatioButton {
@@ -1028,6 +1083,34 @@ QMenu {
     border: 1px solid #2f3338;
     border-radius: 12px;
     padding: 6px;
+}
+QMenu#characterSortMenu {
+    background: #171b1b;
+    border: 1px solid #25332b;
+    border-radius: 12px;
+    padding: 6px;
+}
+QMenu#characterSortMenu::item {
+    background: transparent;
+    color: #e7ece9;
+    padding: 8px 34px 8px 12px;
+    min-width: 132px;
+    min-height: 24px;
+    border-radius: 8px;
+    font-size: 10.5pt;
+    font-weight: 650;
+}
+QMenu#characterSortMenu::item:selected {
+    background: rgba(255, 255, 255, 28);
+    color: #ffffff;
+}
+QMenu#characterSortMenu::indicator {
+    width: 16px;
+    height: 16px;
+    padding-left: 6px;
+}
+QMenu#characterSortMenu::indicator:checked {
+    image: url("__CHECK_ICON__");
 }
 QMenu::item {
     background: transparent;
