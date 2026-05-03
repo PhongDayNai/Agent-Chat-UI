@@ -420,50 +420,25 @@ class AgentChatWindow(
         if active_animation is not None:
             active_animation.stop()
 
-        should_animate = bool(animate and getattr(self, "sidebar_open", False))
-        if not should_animate:
-            widget.setVisible(visible)
-            widget.setMaximumHeight(16777215)
+        if not visible:
+            widget.hide()
+            widget.setMinimumHeight(0)
+            widget.setMaximumHeight(0)
             effect = widget.graphicsEffect()
             if isinstance(effect, QGraphicsOpacityEffect):
                 effect.setOpacity(1.0)
+            self.refresh_sidebar_layout()
             return
 
-        if widget.isVisible() == visible:
-            return
-
-        existing_effect = widget.graphicsEffect()
-        effect = existing_effect if isinstance(existing_effect, QGraphicsOpacityEffect) else None
-        if existing_effect is None:
-            effect = QGraphicsOpacityEffect(widget)
-            widget.setGraphicsEffect(effect)
-
-        if visible:
-            widget.show()
-            if effect is not None:
-                effect.setOpacity(0.0)
-            start_opacity = 0.0
-            end_opacity = 1.0
-        else:
-            start_opacity = effect.opacity() if effect is not None else 1.0
-            end_opacity = 0.0
-
+        widget.setMinimumHeight(0)
+        widget.setMaximumHeight(16777215)
+        widget.setVisible(True)
+        widget.updateGeometry()
+        effect = widget.graphicsEffect()
         if effect is not None:
-            opacity_animation = QPropertyAnimation(effect, b"opacity", self)
-            opacity_animation.setDuration(160)
-            opacity_animation.setEasingCurve(QEasingCurve.Type.OutCubic)
-            opacity_animation.setStartValue(start_opacity)
-            opacity_animation.setEndValue(end_opacity)
-            animations[widget] = opacity_animation
-            self.sidebar_visibility_animations = animations
-            opacity_animation.finished.connect(
-                lambda widget=widget, visible=visible: self.finish_sidebar_section_visibility(widget, visible)
-            )
-            opacity_animation.start()
-            return
-
-        if not visible:
-            widget.hide()
+            if isinstance(effect, QGraphicsOpacityEffect):
+                effect.setOpacity(1.0)
+        self.refresh_sidebar_layout()
 
     def finish_sidebar_section_visibility(self, widget, visible):
         self.sidebar_visibility_animations.pop(widget, None)
@@ -471,8 +446,28 @@ class AgentChatWindow(
             effect = widget.graphicsEffect()
             if isinstance(effect, QGraphicsOpacityEffect):
                 effect.setOpacity(1.0)
+            widget.setMaximumHeight(16777215)
             return
         widget.hide()
+        widget.setMinimumHeight(0)
+        widget.setMaximumHeight(0)
+        self.refresh_sidebar_layout()
+
+    def refresh_sidebar_layout(self):
+        for attr in ("sidebar_content", "sidebar_scroll", "sidebar"):
+            widget = getattr(self, attr, None)
+            if widget is None:
+                continue
+            widget.updateGeometry()
+            widget.update()
+            layout = widget.layout()
+            if layout is not None:
+                layout.invalidate()
+                layout.activate()
+        if hasattr(self, "sidebar_scroll"):
+            scroll_widget = self.sidebar_scroll.widget()
+            if scroll_widget is not None:
+                scroll_widget.adjustSize()
 
 
 
@@ -544,6 +539,7 @@ class AgentChatWindow(
         content_layout = QVBoxLayout(self.sidebar_content)
         content_layout.setContentsMargins(0, 0, 4, 0)
         content_layout.setSpacing(16)
+        content_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
 
         title = QLabel("Agent Chat")
         title.setObjectName("titleLabel")
@@ -628,6 +624,7 @@ class AgentChatWindow(
         frame = QFrame()
         frame.setObjectName("panel")
         frame.setMinimumWidth(0)
+        frame.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         layout = QVBoxLayout(frame)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(16)
@@ -648,6 +645,7 @@ class AgentChatWindow(
         layout.addLayout(advanced_header_row)
 
         self.advanced_body = QWidget()
+        self.advanced_body.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         advanced_body_layout = QVBoxLayout(self.advanced_body)
         advanced_body_layout.setContentsMargins(16, 0, 16, 0)
         advanced_body_layout.setSpacing(16)
@@ -805,21 +803,21 @@ class AgentChatWindow(
 
         character_source_row = QHBoxLayout()
         character_source_row.setSpacing(8)
-        self.character_source_label = QLabel("")
-        self.character_source_label.setObjectName("characterMeta")
-        character_source_row.addWidget(self.character_source_label, 1)
-
         self.character_source_input = QLineEdit(self.character_source_panel)
         self.character_source_input.setPlaceholderText("https://server.example/api/characters")
         self.character_source_input.setText(self.character_profiles.get("source_url", ""))
         self.character_source_input.returnPressed.connect(self.sync_characters)
-        self.character_source_input.hide()
+        character_source_row.addWidget(self.character_source_input, 1)
 
         self.sync_characters_button = QPushButton("Sync")
         self.sync_characters_button.setObjectName("ghostButton")
         self.sync_characters_button.clicked.connect(self.sync_characters)
         character_source_row.addWidget(self.sync_characters_button)
         character_source_panel_layout.addLayout(character_source_row)
+
+        self.character_source_label = QLabel("")
+        self.character_source_label.setObjectName("characterMeta")
+        character_source_panel_layout.addWidget(self.character_source_label)
         self.character_sync_label = QLabel("")
         self.character_sync_label.setObjectName("characterMeta")
         character_source_panel_layout.addWidget(self.character_sync_label)
@@ -1501,8 +1499,6 @@ class AgentChatWindow(
                 widget.style().polish(widget)
         is_character = self.active_mode == MODE_CHARACTER
         is_agent = self.active_mode == MODE_AGENT
-        character_terminal = is_character and bool(self.active_character_capabilities().get("terminal"))
-        tools_visible = is_agent or character_terminal
         effective_terminal_enabled = self.is_terminal_enabled_for_request()
         if hasattr(self, "session_prompt_section"):
             self.set_sidebar_section_visible(
@@ -1513,16 +1509,18 @@ class AgentChatWindow(
             self.set_sidebar_section_visible(self.character_section, is_character)
         if hasattr(self, "character_capabilities_section"):
             self.set_sidebar_section_visible(self.character_capabilities_section, is_character)
-        self.refresh_tool_sections_visibility(is_agent, tools_visible, effective_terminal_enabled)
+        self.refresh_tool_sections_visibility(is_agent, effective_terminal_enabled)
         if hasattr(self, "composer"):
             self.composer.setPlaceholderText(self.composer_placeholder())
         self.refresh_chat_header()
+        self.refresh_sidebar_layout()
+        QTimer.singleShot(0, self.refresh_sidebar_layout)
 
-    def refresh_tool_sections_visibility(self, is_agent, tools_visible, effective_terminal_enabled):
+    def refresh_tool_sections_visibility(self, is_agent, effective_terminal_enabled):
         if hasattr(self, "workspace_section"):
-            self.set_sidebar_section_visible(self.workspace_section, tools_visible)
+            self.set_sidebar_section_visible(self.workspace_section, is_agent)
         if hasattr(self, "agent_terminal_section"):
-            self.set_sidebar_section_visible(self.agent_terminal_section, tools_visible)
+            self.set_sidebar_section_visible(self.agent_terminal_section, is_agent)
         if hasattr(self, "agent_terminal_checkbox"):
             self.set_sidebar_section_visible(self.agent_terminal_checkbox, is_agent)
         if hasattr(self, "agent_terminal_toggle_label"):
@@ -1530,7 +1528,7 @@ class AgentChatWindow(
         if hasattr(self, "side_terminal_permission_button"):
             self.side_terminal_permission_button.setEnabled(effective_terminal_enabled)
         if hasattr(self, "terminal_permission_button"):
-            self.set_sidebar_section_visible(self.terminal_permission_button, tools_visible)
+            self.set_sidebar_section_visible(self.terminal_permission_button, is_agent)
             self.terminal_permission_button.setEnabled(effective_terminal_enabled)
 
     def composer_placeholder(self):
