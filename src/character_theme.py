@@ -37,6 +37,17 @@ QFrame#composerCanvas[mode="character"] {
     border-radius: 24px;
 }
 
+QFrame#chatHeaderBlur[mode="character"] {
+    background: qlineargradient(
+        x1: 0, y1: 0, x2: 0, y2: 1,
+        stop: 0 rgba(15, 20, 17, 255),
+        stop: 0.30 rgba(15, 20, 17, 230),
+        stop: 0.68 rgba(15, 20, 17, 124),
+        stop: 1 rgba(15, 20, 17, 0)
+    );
+    border: none;
+}
+
 QPushButton#iconActionButton[variant="send"][mode="character"] {
     background: #7c6cff;
     border-color: #7c6cff;

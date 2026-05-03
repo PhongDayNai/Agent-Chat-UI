@@ -4,6 +4,7 @@ import base64
 import html
 import json
 import mimetypes
+import time
 import uuid
 from datetime import datetime
 from io import BytesIO
@@ -55,6 +56,11 @@ from window_shared import (
 
 
 class ChatFlowMixin:
+    CONTEXT_USAGE_ANIMATION_MS = 620
+    CONTEXT_USAGE_STREAM_UPDATE_INTERVAL_MS = 80
+    CHAT_HEADER_OVERLAY_HEIGHT = 40
+    CHAT_MESSAGES_TOP_PADDING = 40
+
     def update_send_availability(self):
         has_text = bool(self.composer.toPlainText().strip()) or bool(self.pending_attachments)
         has_model = bool(self.available_models) and bool(self.current_model_name())
@@ -251,6 +257,7 @@ class ChatFlowMixin:
         self.context_usage_completion_tokens = 0
         self.context_usage_completion_text = ""
         self.context_usage_completion_loading = True
+        self.context_usage_stream_last_update = 0.0
         self.refresh_chat_header()
 
         self.worker = ChatCompletionWorker(self)
@@ -498,14 +505,16 @@ class ChatFlowMixin:
                     context_window,
                 )
             )
-        if hasattr(self, "context_usage_label"):
-            self.context_usage_label.setText(
-                f"Context {self.format_token_amount(current_tokens)} / {self.format_token_amount(context_window)}"
-            )
         loading_active = enabled and self.context_usage_completion_loading
+        if hasattr(self, "context_usage_label"):
+            self.update_context_usage_display(
+                current_tokens,
+                self.context_usage_completion_tokens,
+                context_window,
+                animate=enabled,
+            )
         if hasattr(self, "context_usage_new_tokens_label"):
-            self.context_usage_new_tokens_label.setText(str(self.context_usage_completion_tokens))
-            self.context_usage_new_tokens_label.setVisible(not loading_active)
+            self.context_usage_new_tokens_label.setVisible(enabled)
         if hasattr(self, "context_usage_loading_label"):
             self.context_usage_loading_label.setVisible(loading_active)
         if hasattr(self, "context_usage_loading_movie"):
@@ -517,6 +526,101 @@ class ChatFlowMixin:
         if hasattr(self, "context_usage_detail"):
             self.context_usage_detail.setText(self.context_usage_detail_text(context_window))
 
+    def update_context_usage_display(self, current_tokens, completion_tokens, context_window, animate=True):
+        self.ensure_context_usage_animation_state()
+        self.context_usage_display_context_window = context_window
+        current_tokens = self.normalize_context_window_value(current_tokens)
+        completion_tokens = self.normalize_context_window_value(completion_tokens)
+        display_current = self.context_usage_display_current_tokens
+        display_completion = self.context_usage_display_completion_tokens
+        targets_unchanged = (
+            self.context_usage_target_current_tokens == current_tokens
+            and self.context_usage_target_completion_tokens == completion_tokens
+        )
+        if targets_unchanged:
+            self.render_context_usage_display(display_current, display_completion)
+            return
+
+        should_animate = (
+            animate
+            and current_tokens > display_current
+            and completion_tokens >= display_completion
+        )
+        if not should_animate:
+            self.context_usage_target_current_tokens = current_tokens
+            self.context_usage_target_completion_tokens = completion_tokens
+            self.context_usage_display_current_tokens = current_tokens
+            self.context_usage_display_completion_tokens = completion_tokens
+            self.context_usage_animation_timer.stop()
+            self.render_context_usage_display(current_tokens, completion_tokens)
+            return
+
+        self.context_usage_target_current_tokens = current_tokens
+        self.context_usage_target_completion_tokens = completion_tokens
+        if self.context_usage_animation_timer.isActive():
+            return
+
+        self.context_usage_animation_start_current_tokens = display_current
+        self.context_usage_animation_start_completion_tokens = display_completion
+        self.context_usage_animation_started_at = time.monotonic()
+        self.context_usage_animation_timer.start()
+        self.advance_context_usage_animation()
+
+    def ensure_context_usage_animation_state(self):
+        if hasattr(self, "context_usage_animation_timer"):
+            return
+        self.context_usage_display_current_tokens = 0
+        self.context_usage_display_completion_tokens = 0
+        self.context_usage_target_current_tokens = 0
+        self.context_usage_target_completion_tokens = 0
+        self.context_usage_animation_start_current_tokens = 0
+        self.context_usage_animation_start_completion_tokens = 0
+        self.context_usage_display_context_window = 0
+        self.context_usage_animation_started_at = time.monotonic()
+        self.context_usage_animation_timer = QTimer(self)
+        self.context_usage_animation_timer.setInterval(16)
+        self.context_usage_animation_timer.timeout.connect(self.advance_context_usage_animation)
+
+    def advance_context_usage_animation(self):
+        self.ensure_context_usage_animation_state()
+        elapsed_ms = (time.monotonic() - self.context_usage_animation_started_at) * 1000
+        progress = min(1.0, elapsed_ms / self.CONTEXT_USAGE_ANIMATION_MS)
+        eased = progress * progress * progress
+        current_delta = (
+            self.context_usage_target_current_tokens
+            - self.context_usage_animation_start_current_tokens
+        )
+        completion_delta = (
+            self.context_usage_target_completion_tokens
+            - self.context_usage_animation_start_completion_tokens
+        )
+        current_value = round(
+            self.context_usage_animation_start_current_tokens + current_delta * eased
+        )
+        completion_value = round(
+            self.context_usage_animation_start_completion_tokens + completion_delta * eased
+        )
+        if progress >= 1.0:
+            current_value = self.context_usage_target_current_tokens
+            completion_value = self.context_usage_target_completion_tokens
+            self.context_usage_animation_timer.stop()
+        self.context_usage_display_current_tokens = current_value
+        self.context_usage_display_completion_tokens = completion_value
+        self.render_context_usage_display(current_value, completion_value)
+
+    def render_context_usage_display(self, current_tokens, completion_tokens):
+        if hasattr(self, "context_usage_label"):
+            self.context_usage_label.setText(
+                f"Context {self.format_context_usage_header_amount(current_tokens)} / "
+                f"{self.format_context_usage_header_amount(self.context_usage_display_context_window)}"
+            )
+        if hasattr(self, "context_usage_new_tokens_label"):
+            self.context_usage_new_tokens_label.setText(str(completion_tokens))
+
+    def format_context_usage_header_amount(self, value):
+        value = self.normalize_context_window_value(value)
+        return f"{value:,}" if value else "--"
+
     def chat_header_text(self):
         if self.active_mode == MODE_AGENT:
             return "Agent", f"Workspace: {self.workspace_path}"
@@ -527,6 +631,22 @@ class ChatFlowMixin:
             return "Character", "Select a character to start"
         return "Chat", "General conversation"
 
+    def chat_messages_top_padding(self):
+        return self.CHAT_MESSAGES_TOP_PADDING
+
+    def position_chat_header_blur_overlay(self):
+        if not hasattr(self, "chat_header_blur") or not hasattr(self, "scroll_area"):
+            return
+        viewport = self.scroll_area.viewport()
+        self.chat_header_blur.setGeometry(
+            0,
+            0,
+            max(0, viewport.width()),
+            self.CHAT_HEADER_OVERLAY_HEIGHT,
+        )
+        self.chat_header_blur.raise_()
+        self.chat_header_blur.show()
+
     def active_context_window(self):
         runtime_value = self.normalize_context_window_value(getattr(self, "runtime_context_window", 0))
         if runtime_value:
@@ -534,11 +654,42 @@ class ChatFlowMixin:
         return self.model_context_window(self.current_model_name())
 
     def context_usage_tooltip(self, prompt_tokens, completion_tokens, context_window):
-        new_tokens = "loading" if self.context_usage_completion_loading else str(completion_tokens)
+        def tooltip_amount(value):
+            value = self.normalize_context_window_value(value)
+            return f"{value:,}" if value else "0"
+
+        total_tokens = prompt_tokens + completion_tokens
+        output_tokens = (
+            f"~{tooltip_amount(completion_tokens)}"
+            if self.context_usage_completion_loading
+            else tooltip_amount(completion_tokens)
+        )
+        rows = [
+            ("Prompt", tooltip_amount(prompt_tokens)),
+            ("Output", output_tokens),
+        ]
+        if context_window:
+            remaining_tokens = max(0, context_window - total_tokens)
+            rows.extend(
+                [
+                    ("Window", tooltip_amount(context_window)),
+                    ("Left", tooltip_amount(remaining_tokens)),
+                ]
+            )
+        else:
+            rows.append(("Window", "unknown"))
+        row_html = "".join(
+            "<tr>"
+            f"<td style='color:#9aa1a9; padding:1px 14px 1px 0;'>{key}</td>"
+            f"<td style='color:#f4f5f6; padding:1px 0; text-align:right;'>{value}</td>"
+            "</tr>"
+            for key, value in rows
+        )
         return (
-            "context "
-            f"{self.format_token_amount(prompt_tokens)} + {new_tokens}"
-            f"/{self.format_token_amount(context_window)}"
+            "<html><body>"
+            "<div style='font-weight:600; margin-bottom:4px;'>Context</div>"
+            f"<table cellspacing='0' cellpadding='0'>{row_html}</table>"
+            "</body></html>"
         )
 
     def context_usage_detail_text(self, context_window):
@@ -677,6 +828,7 @@ class ChatFlowMixin:
     def on_token_received(self, token):
         should_focus_reply = self.assistant_reply_focus_active
         self.context_usage_completion_text += token
+        self.update_streaming_context_usage_tokens()
         self.refresh_chat_header()
         if self.current_assistant_card is not None:
             self.current_assistant_card.stop_loading()
@@ -686,6 +838,18 @@ class ChatFlowMixin:
                 self.current_assistant_card.append_text(token)
         if should_focus_reply:
             self.scroll_to_assistant_reply()
+
+    def update_streaming_context_usage_tokens(self, force=False):
+        now = time.monotonic()
+        last_update = getattr(self, "context_usage_stream_last_update", 0.0)
+        interval = self.CONTEXT_USAGE_STREAM_UPDATE_INTERVAL_MS / 1000
+        if not force and now - last_update < interval:
+            return
+        estimated_tokens = self.estimate_text_tokens(self.context_usage_completion_text) or 0
+        if estimated_tokens < self.context_usage_completion_tokens:
+            return
+        self.context_usage_stream_last_update = now
+        self.context_usage_completion_tokens = estimated_tokens
 
     def on_thinking_received(self, token):
         should_focus_reply = self.assistant_reply_focus_active
@@ -699,6 +863,7 @@ class ChatFlowMixin:
             self.current_assistant_card.flush_pending_render()
             self.current_assistant_card.stop_loading()
         self.context_usage_completion_text = full_response or self.context_usage_completion_text
+        self.update_streaming_context_usage_tokens(force=True)
         self.context_usage_completion_tokens = self.count_text_tokens(self.context_usage_completion_text)
         self.context_usage_completion_loading = False
         self.refresh_chat_header()
@@ -813,7 +978,10 @@ class ChatFlowMixin:
             else:
                 self.empty_title.setText("Start a new conversation")
                 self.empty_body.setText("Ask anything, attach files, or provide URL context.")
-        self.empty_state.setVisible(self.messages_layout.count() == 0)
+        is_empty = self.messages_layout.count() == 0
+        if hasattr(self, "chat_layout"):
+            self.chat_layout.setContentsMargins(26, self.chat_messages_top_padding(), 26, 26)
+        self.empty_state.setVisible(is_empty)
 
     def update_sticky_code_header(self, *_args):
         if self.sticky_code_header is None or not hasattr(self, "scroll_area"):
@@ -853,6 +1021,7 @@ class ChatFlowMixin:
             QEvent.Type.Resize,
             QEvent.Type.Show,
         ):
+            QTimer.singleShot(0, self.position_chat_header_blur_overlay)
             QTimer.singleShot(0, self.update_sticky_code_header)
         for scroll_area in tuple(getattr(self, "auto_scrollbar_timers", {}).keys()):
             if watched in (scroll_area.viewport(), scroll_area.verticalScrollBar()):
@@ -1028,6 +1197,7 @@ class ChatFlowMixin:
         self.context_usage_completion_tokens = 0
         self.context_usage_completion_text = ""
         self.context_usage_completion_loading = False
+        self.context_usage_stream_last_update = 0.0
         self.stop_assistant_reply_focus()
         if hasattr(self, "terminal_approval_banner"):
             self.terminal_approval_banner.hide()

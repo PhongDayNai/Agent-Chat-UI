@@ -153,6 +153,16 @@ QLabel#chatSubtitleLabel {
     font-size: 8.5pt;
     color: #7f868d;
 }
+QFrame#chatHeaderBlur {
+    background: qlineargradient(
+        x1: 0, y1: 0, x2: 0, y2: 1,
+        stop: 0 rgba(17, 19, 21, 255),
+        stop: 0.30 rgba(17, 19, 21, 226),
+        stop: 0.68 rgba(17, 19, 21, 118),
+        stop: 1 rgba(17, 19, 21, 0)
+    );
+    border: none;
+}
 QWidget#contextUsageHeader {
     background: transparent;
 }

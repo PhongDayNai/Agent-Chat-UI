@@ -265,7 +265,7 @@ class AgentChatWindow(
         chat_header = QWidget()
         chat_header.setObjectName("chatHeader")
         chat_header_layout = QHBoxLayout(chat_header)
-        chat_header_layout.setContentsMargins(26, 16, 26, 12)
+        chat_header_layout.setContentsMargins(26, 16, 26, 8)
         chat_header_layout.setSpacing(12)
 
         chat_header_text = QVBoxLayout()
@@ -323,9 +323,15 @@ class AgentChatWindow(
         self.scroll_area.verticalScrollBar().valueChanged.connect(self.update_assistant_reply_follow_state)
         self.scroll_area.verticalScrollBar().rangeChanged.connect(self.update_assistant_reply_follow_range)
 
+        self.chat_header_blur = QFrame(self.scroll_area.viewport())
+        self.chat_header_blur.setObjectName("chatHeaderBlur")
+        self.chat_header_blur.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.chat_header_blur.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self.chat_header_blur.raise_()
+
         self.chat_surface = QWidget()
         self.chat_layout = QVBoxLayout(self.chat_surface)
-        self.chat_layout.setContentsMargins(26, 26, 26, 26)
+        self.chat_layout.setContentsMargins(26, self.chat_messages_top_padding(), 26, 26)
         self.chat_layout.setSpacing(16)
         self.chat_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
 
@@ -364,6 +370,7 @@ class AgentChatWindow(
         self.refresh_chat_header()
         self.update_empty_state()
         self.update_send_availability()
+        self.position_chat_header_blur_overlay()
         self.apply_responsive_layout()
         if self.sidebar_pinned:
             QTimer.singleShot(0, self.expand_sidebar)
@@ -1180,9 +1187,9 @@ class AgentChatWindow(
         layout.setContentsMargins(10, 0, 10, 10)
         layout.setSpacing(0)
 
-        canvas = QFrame()
-        canvas.setObjectName("composerCanvas")
-        canvas_layout = QVBoxLayout(canvas)
+        self.composer_canvas = QFrame()
+        self.composer_canvas.setObjectName("composerCanvas")
+        canvas_layout = QVBoxLayout(self.composer_canvas)
         canvas_layout.setContentsMargins(14, 12, 10, 8)
         canvas_layout.setSpacing(8)
 
@@ -1302,7 +1309,7 @@ class AgentChatWindow(
         footer_row.addWidget(self.send_button)
 
         canvas_layout.addLayout(footer_row)
-        layout.addWidget(canvas)
+        layout.addWidget(self.composer_canvas)
         return frame
 
     def apply_preset(self, preset):
@@ -1412,7 +1419,7 @@ class AgentChatWindow(
                 button.blockSignals(False)
                 button.style().unpolish(button)
                 button.style().polish(button)
-        for attr in ("sidebar", "content_frame", "composer_frame"):
+        for attr in ("sidebar", "content_frame", "composer_frame", "composer_canvas", "composer", "chat_header_blur"):
             widget = getattr(self, attr, None)
             if widget is not None:
                 widget.setProperty("mode", self.active_mode)
@@ -1552,6 +1559,7 @@ class AgentChatWindow(
             self.sync_sidebar_width(self.target_sidebar_width())
         self.update_model_selector_text()
         self.update_sticky_code_header()
+        self.position_chat_header_blur_overlay()
         self.position_toast()
         self.position_character_overlay()
         self.position_character_hero_elements()
