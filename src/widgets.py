@@ -27,12 +27,14 @@ from PyQt6.QtWidgets import (
     QApplication,
     QComboBox,
     QDialog,
+    QDoubleSpinBox,
     QFrame,
     QHBoxLayout,
     QLabel,
     QPlainTextEdit,
     QPushButton,
     QSizePolicy,
+    QSpinBox,
     QStyle,
     QStyledItemDelegate,
     QStyleOptionViewItem,
@@ -138,6 +140,9 @@ class DeletableHistoryComboBox(QComboBox):
             return
         super().showPopup()
 
+    def wheelEvent(self, event):
+        event.ignore()
+
     def eventFilter(self, watched, event):
         if watched == self.view().viewport() and event.type() == QEvent.Type.MouseButtonRelease:
             index = self.view().indexAt(event.position().toPoint())
@@ -151,6 +156,25 @@ class DeletableHistoryComboBox(QComboBox):
                     self.item_delete_requested.emit(str(value))
                     return True
         return super().eventFilter(watched, event)
+
+
+class NoWheelSpinBox(QSpinBox):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
+
+    def wheelEvent(self, event):
+        event.ignore()
+
+
+class NoWheelDoubleSpinBox(QDoubleSpinBox):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setButtonSymbols(QDoubleSpinBox.ButtonSymbols.NoButtons)
+
+    def wheelEvent(self, event):
+        event.ignore()
+
 
 class PinIconButton(QPushButton):
     def __init__(self, parent=None):

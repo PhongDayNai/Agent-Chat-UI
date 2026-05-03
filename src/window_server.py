@@ -329,7 +329,7 @@ class ServerSettingsMixin:
         if hasattr(self, "new_api_key_button"):
             self.new_api_key_button.setText("Hide new key" if self.new_api_key_panel_expanded else "New key")
         if hasattr(self, "api_keys_section"):
-            self.api_keys_section.setVisible(self.api_keys_enabled)
+            self.set_sidebar_section_visible(self.api_keys_section, self.api_keys_enabled)
         self.refresh_connection_settings_ui()
 
     def refresh_connection_settings_ui(self):
@@ -351,9 +351,9 @@ class ServerSettingsMixin:
             self.set_advanced_panel_expanded(expected_expanded, animate=False, persist=False)
         if self.advanced_expanded:
             if hasattr(self, "server_section"):
-                self.server_section.setVisible(self.server_enabled)
+                self.set_sidebar_section_visible(self.server_section, self.server_enabled)
             if hasattr(self, "api_keys_section"):
-                self.api_keys_section.setVisible(self.api_keys_enabled)
+                self.set_sidebar_section_visible(self.api_keys_section, self.api_keys_enabled)
         if hasattr(self, "new_api_key_panel") and connection_collapsed:
             self.new_api_key_panel_expanded = False
             self.new_api_key_panel.hide()
@@ -364,9 +364,9 @@ class ServerSettingsMixin:
         self.api_key_editing = expanded
         if expanded:
             if hasattr(self, "server_section"):
-                self.server_section.setVisible(self.server_enabled)
+                self.set_sidebar_section_visible(self.server_section, self.server_enabled)
             if hasattr(self, "api_keys_section"):
-                self.api_keys_section.setVisible(self.api_keys_enabled)
+                self.set_sidebar_section_visible(self.api_keys_section, self.api_keys_enabled)
         self.set_advanced_panel_expanded(expanded)
 
     def set_advanced_panel_expanded(self, expanded, animate=True, persist=True):

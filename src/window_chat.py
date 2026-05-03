@@ -391,8 +391,9 @@ class ChatFlowMixin:
         self.apply_prompt_button.style().unpolish(self.apply_prompt_button)
         self.apply_prompt_button.style().polish(self.apply_prompt_button)
         if hasattr(self, "session_prompt_section"):
-            self.session_prompt_section.setVisible(
-                self.session_prompt_enabled and self.active_mode != MODE_CHARACTER
+            self.set_sidebar_section_visible(
+                self.session_prompt_section,
+                self.session_prompt_enabled and self.active_mode != MODE_CHARACTER,
             )
         self.refresh_session_prompt_history_ui()
 

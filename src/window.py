@@ -6,7 +6,6 @@ from PyQt6.QtWidgets import (
     QApplication,
     QBoxLayout,
     QButtonGroup,
-    QDoubleSpinBox,
     QFormLayout,
     QFrame,
     QHBoxLayout,
@@ -18,9 +17,9 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSizePolicy,
-    QSpinBox,
     QVBoxLayout,
     QWidget,
+    QGraphicsOpacityEffect,
 )
 
 from constants import (
@@ -44,6 +43,8 @@ from styles import APP_STYLE
 from widgets import (
     AutoResizingTextEdit,
     DeletableHistoryComboBox,
+    NoWheelDoubleSpinBox,
+    NoWheelSpinBox,
     PinIconButton,
     StickyCodeHeader,
     SvgActionButton,
@@ -182,6 +183,7 @@ class AgentChatWindow(
         self.advanced_body_animation = None
         self.composer_expanded = bool(ui_config.get("chat_controls_expanded", True))
         self.composer_body_animation = None
+        self.sidebar_visibility_animations = {}
         self.auto_scrollbar_timers = {}
         self.sidebar_pinned = self.pin_panel
         self.sidebar_open = False
@@ -409,6 +411,69 @@ class AgentChatWindow(
         y = max(margin, self.height() - self.toast_label.height() - margin)
         self.toast_label.move(x, y)
 
+    def set_sidebar_section_visible(self, widget, visible, animate=True):
+        if widget is None:
+            return
+        visible = bool(visible)
+        animations = getattr(self, "sidebar_visibility_animations", {})
+        active_animation = animations.pop(widget, None)
+        if active_animation is not None:
+            active_animation.stop()
+
+        should_animate = bool(animate and getattr(self, "sidebar_open", False))
+        if not should_animate:
+            widget.setVisible(visible)
+            widget.setMaximumHeight(16777215)
+            effect = widget.graphicsEffect()
+            if isinstance(effect, QGraphicsOpacityEffect):
+                effect.setOpacity(1.0)
+            return
+
+        if widget.isVisible() == visible:
+            return
+
+        existing_effect = widget.graphicsEffect()
+        effect = existing_effect if isinstance(existing_effect, QGraphicsOpacityEffect) else None
+        if existing_effect is None:
+            effect = QGraphicsOpacityEffect(widget)
+            widget.setGraphicsEffect(effect)
+
+        if visible:
+            widget.show()
+            if effect is not None:
+                effect.setOpacity(0.0)
+            start_opacity = 0.0
+            end_opacity = 1.0
+        else:
+            start_opacity = effect.opacity() if effect is not None else 1.0
+            end_opacity = 0.0
+
+        if effect is not None:
+            opacity_animation = QPropertyAnimation(effect, b"opacity", self)
+            opacity_animation.setDuration(160)
+            opacity_animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+            opacity_animation.setStartValue(start_opacity)
+            opacity_animation.setEndValue(end_opacity)
+            animations[widget] = opacity_animation
+            self.sidebar_visibility_animations = animations
+            opacity_animation.finished.connect(
+                lambda widget=widget, visible=visible: self.finish_sidebar_section_visibility(widget, visible)
+            )
+            opacity_animation.start()
+            return
+
+        if not visible:
+            widget.hide()
+
+    def finish_sidebar_section_visibility(self, widget, visible):
+        self.sidebar_visibility_animations.pop(widget, None)
+        if visible:
+            effect = widget.graphicsEffect()
+            if isinstance(effect, QGraphicsOpacityEffect):
+                effect.setOpacity(1.0)
+            return
+        widget.hide()
+
 
 
 
@@ -487,10 +552,10 @@ class AgentChatWindow(
         self.status_detail = QLabel("", frame)
         self.status_detail.hide()
 
-        mode_heading = QLabel("Mode")
-        mode_heading.setObjectName("sectionLabel")
-        content_layout.addWidget(mode_heading)
-
+        mode_section = QWidget()
+        mode_section_layout = QVBoxLayout(mode_section)
+        mode_section_layout.setContentsMargins(0, 0, 0, 0)
+        mode_section_layout.setSpacing(0)
         mode_row = QHBoxLayout()
         mode_row.setSpacing(8)
         self.mode_button_group = QButtonGroup(self)
@@ -504,11 +569,16 @@ class AgentChatWindow(
             self.mode_button_group.addButton(button)
             self.mode_buttons[mode] = button
             mode_row.addWidget(button)
-        content_layout.addLayout(mode_row)
+        mode_section_layout.addLayout(mode_row)
+        content_layout.addWidget(mode_section)
 
+        model_section = QWidget()
+        model_section_layout = QVBoxLayout(model_section)
+        model_section_layout.setContentsMargins(0, 0, 0, 0)
+        model_section_layout.setSpacing(10)
         model_heading = QLabel("Model")
         model_heading.setObjectName("sectionLabel")
-        content_layout.addWidget(model_heading)
+        model_section_layout.addWidget(model_heading)
 
         self.model_selector = QPushButton("Select model")
         self.model_selector.setObjectName("modelSelectorButton")
@@ -516,7 +586,7 @@ class AgentChatWindow(
         self.model_menu.setObjectName("modelMenu")
         self.model_menu.aboutToShow.connect(self.refresh_model_menu)
         self.model_selector.setMenu(self.model_menu)
-        content_layout.addWidget(self.model_selector)
+        model_section_layout.addWidget(self.model_selector)
 
         self.sidebar_actions_layout = QBoxLayout(QBoxLayout.Direction.LeftToRight)
         self.sidebar_actions_layout.setSpacing(10)
@@ -532,7 +602,8 @@ class AgentChatWindow(
         self.clear_button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.clear_button.clicked.connect(self.clear_chat)
         self.sidebar_actions_layout.addWidget(self.clear_button)
-        content_layout.addLayout(self.sidebar_actions_layout)
+        model_section_layout.addLayout(self.sidebar_actions_layout)
+        content_layout.addWidget(model_section)
 
         self.advanced_panel = self.build_advanced_panel()
         content_layout.addWidget(self.advanced_panel)
@@ -956,7 +1027,7 @@ class AgentChatWindow(
         composer_layout.setFormAlignment(Qt.AlignmentFlag.AlignTop)
         composer_layout.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.FieldsStayAtSizeHint)
 
-        self.composer_max_lines_spin = QSpinBox()
+        self.composer_max_lines_spin = NoWheelSpinBox()
         self.composer_max_lines_spin.setRange(MIN_COMPOSER_MAX_LINES, MAX_COMPOSER_MAX_LINES)
         self.composer_max_lines_spin.setSuffix(" lines")
         self.composer_max_lines_spin.setValue(self.composer_max_lines)
@@ -1030,7 +1101,7 @@ class AgentChatWindow(
 
         debounce_row.addWidget(QLabel("Debounce streaming"), 1, Qt.AlignmentFlag.AlignVCenter)
 
-        self.debounce_interval_spin = QSpinBox()
+        self.debounce_interval_spin = NoWheelSpinBox()
         self.debounce_interval_spin.setRange(0, 1000)
         self.debounce_interval_spin.setSuffix(" ms")
         self.debounce_interval_spin.setValue(self.assistant_debounce_interval_ms)
@@ -1120,7 +1191,7 @@ class AgentChatWindow(
         sampling_layout.setSpacing(12)
         sampling_layout.setLabelAlignment(Qt.AlignmentFlag.AlignLeft)
 
-        self.temperature_spin = QDoubleSpinBox()
+        self.temperature_spin = NoWheelDoubleSpinBox()
         self.temperature_spin.setRange(0.0, 2.0)
         self.temperature_spin.setDecimals(2)
         self.temperature_spin.setSingleStep(0.05)
@@ -1128,7 +1199,7 @@ class AgentChatWindow(
         self.temperature_spin.valueChanged.connect(lambda _value: self.save_config())
         sampling_layout.addRow("Temperature", self.temperature_spin)
 
-        self.top_p_spin = QDoubleSpinBox()
+        self.top_p_spin = NoWheelDoubleSpinBox()
         self.top_p_spin.setRange(0.0, 1.0)
         self.top_p_spin.setDecimals(2)
         self.top_p_spin.setSingleStep(0.05)
@@ -1136,7 +1207,7 @@ class AgentChatWindow(
         self.top_p_spin.valueChanged.connect(lambda _value: self.save_config())
         sampling_layout.addRow("Top P", self.top_p_spin)
 
-        self.top_k_spin = QSpinBox()
+        self.top_k_spin = NoWheelSpinBox()
         self.top_k_spin.setRange(1, 200)
         self.top_k_spin.setValue(int(self.config.get("sampling", {}).get("top_k", 40)))
         self.top_k_spin.valueChanged.connect(lambda _value: self.save_config())
@@ -1382,7 +1453,10 @@ class AgentChatWindow(
             self.debounce_interval_spin.setEnabled(self.assistant_debounce_enabled)
             self.debounce_interval_spin.blockSignals(False)
         if hasattr(self, "assistant_rendering_section"):
-            self.assistant_rendering_section.setVisible(self.assistant_rendering_enabled)
+            self.set_sidebar_section_visible(
+                self.assistant_rendering_section,
+                self.assistant_rendering_enabled,
+            )
         self.refresh_chat_header()
 
     def set_active_mode(self, mode):
@@ -1431,27 +1505,33 @@ class AgentChatWindow(
         tools_visible = is_agent or character_terminal
         effective_terminal_enabled = self.is_terminal_enabled_for_request()
         if hasattr(self, "session_prompt_section"):
-            self.session_prompt_section.setVisible(self.session_prompt_enabled and not is_character)
+            self.set_sidebar_section_visible(
+                self.session_prompt_section,
+                self.session_prompt_enabled and not is_character,
+            )
         if hasattr(self, "character_section"):
-            self.character_section.setVisible(is_character)
+            self.set_sidebar_section_visible(self.character_section, is_character)
         if hasattr(self, "character_capabilities_section"):
-            self.character_capabilities_section.setVisible(is_character)
-        if hasattr(self, "workspace_section"):
-            self.workspace_section.setVisible(tools_visible)
-        if hasattr(self, "agent_terminal_section"):
-            self.agent_terminal_section.setVisible(tools_visible)
-        if hasattr(self, "agent_terminal_checkbox"):
-            self.agent_terminal_checkbox.setVisible(is_agent)
-        if hasattr(self, "agent_terminal_toggle_label"):
-            self.agent_terminal_toggle_label.setVisible(is_agent)
-        if hasattr(self, "side_terminal_permission_button"):
-            self.side_terminal_permission_button.setEnabled(effective_terminal_enabled)
-        if hasattr(self, "terminal_permission_button"):
-            self.terminal_permission_button.setVisible(tools_visible)
-            self.terminal_permission_button.setEnabled(effective_terminal_enabled)
+            self.set_sidebar_section_visible(self.character_capabilities_section, is_character)
+        self.refresh_tool_sections_visibility(is_agent, tools_visible, effective_terminal_enabled)
         if hasattr(self, "composer"):
             self.composer.setPlaceholderText(self.composer_placeholder())
         self.refresh_chat_header()
+
+    def refresh_tool_sections_visibility(self, is_agent, tools_visible, effective_terminal_enabled):
+        if hasattr(self, "workspace_section"):
+            self.set_sidebar_section_visible(self.workspace_section, tools_visible)
+        if hasattr(self, "agent_terminal_section"):
+            self.set_sidebar_section_visible(self.agent_terminal_section, tools_visible)
+        if hasattr(self, "agent_terminal_checkbox"):
+            self.set_sidebar_section_visible(self.agent_terminal_checkbox, is_agent)
+        if hasattr(self, "agent_terminal_toggle_label"):
+            self.set_sidebar_section_visible(self.agent_terminal_toggle_label, is_agent)
+        if hasattr(self, "side_terminal_permission_button"):
+            self.side_terminal_permission_button.setEnabled(effective_terminal_enabled)
+        if hasattr(self, "terminal_permission_button"):
+            self.set_sidebar_section_visible(self.terminal_permission_button, tools_visible)
+            self.terminal_permission_button.setEnabled(effective_terminal_enabled)
 
     def composer_placeholder(self):
         if self.active_mode == MODE_AGENT:
