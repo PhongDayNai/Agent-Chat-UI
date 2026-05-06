@@ -1,6 +1,7 @@
 """Reusable Qt widgets used by the chat window."""
 
 import re
+import time
 from datetime import datetime
 from html import escape
 from math import ceil
@@ -63,6 +64,60 @@ from markdown_utils import (
     split_markdown_code_segments,
 )
 from styles import MARKDOWN_STYLESHEET, THINKING_MARKDOWN_STYLESHEET
+
+def format_elapsed_time_text(elapsed):
+    total_seconds = max(0, int(elapsed))
+    hours = total_seconds // 3600
+    minutes = (total_seconds % 3600) // 60
+    seconds = total_seconds % 60
+    parts = []
+    if hours:
+        parts.append(f"{hours}h")
+    if minutes:
+        parts.append(f"{minutes}m")
+    if seconds or not parts:
+        parts.append(f"{seconds}s")
+    return "".join(parts)
+
+def elided_text_lines(text, font, width, max_lines=2):
+    text = " ".join(str(text or "").split())
+    if not text:
+        return [""]
+    metrics = QFontMetrics(font)
+    width = int(width)
+    if width < 120:
+        width = 480
+    if metrics.horizontalAdvance(text) <= width:
+        return [text]
+    if max_lines <= 1:
+        return [metrics.elidedText(text, Qt.TextElideMode.ElideRight, width)]
+
+    words = text.split(" ")
+    lines = []
+    index = 0
+    while index < len(words) and len(lines) < max_lines:
+        if len(lines) == max_lines - 1:
+            lines.append(metrics.elidedText(
+                " ".join(words[index:]),
+                Qt.TextElideMode.ElideRight,
+                width,
+            ))
+            break
+
+        current = words[index]
+        index += 1
+        while index < len(words):
+            candidate = f"{current} {words[index]}"
+            if metrics.horizontalAdvance(candidate) > width:
+                break
+            current = candidate
+            index += 1
+        lines.append(current if metrics.horizontalAdvance(current) <= width else metrics.elidedText(
+            current,
+            Qt.TextElideMode.ElideRight,
+            width,
+        ))
+    return lines or [metrics.elidedText(text, Qt.TextElideMode.ElideRight, width)]
 
 class DeletableHistoryDelegate(QStyledItemDelegate):
     def __init__(self, parent=None):
@@ -259,6 +314,185 @@ class RotatingSvgButton(SvgActionButton):
         painter.rotate(self.rotation_degrees)
         painter.translate(-target.center())
         renderer.render(painter, target)
+
+class ThinkingTitleLabel(QLabel):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.title_text = "Analyzing request"
+        self.shimmer_index = 0
+        self.shimmer_active = False
+        self.setMinimumWidth(0)
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        font = self.font()
+        font.setWeight(QFont.Weight.DemiBold)
+        self.setFont(font)
+        line_height = QFontMetrics(self.font()).lineSpacing()
+        self.setMinimumHeight(line_height * 2 + 6)
+        self.setMaximumHeight(line_height * 2 + 6)
+        self.timer = QTimer(self)
+        self.timer.setInterval(45)
+        self.timer.timeout.connect(self.advance_shimmer)
+        self.render_title()
+
+    def set_title(self, text):
+        text = (text or "").strip() or "Analyzing request"
+        if text == self.title_text:
+            return
+        self.title_text = text
+        self.shimmer_index = 0
+        self.render_title()
+
+    def set_shimmer_active(self, active):
+        active = bool(active)
+        if self.shimmer_active == active:
+            return
+        self.shimmer_active = active
+        if active:
+            self.timer.start()
+        else:
+            self.timer.stop()
+            self.shimmer_index = 0
+        self.render_title()
+
+    def advance_shimmer(self):
+        self.shimmer_index = (self.shimmer_index + 0.55) % max(1, len(self.title_text))
+        self.render_title()
+
+    def render_title(self):
+        self.sync_height_to_lines()
+        self.update()
+
+    def title_lines(self):
+        return elided_text_lines(self.title_text, self.font(), max(120, self.width()), max_lines=2)
+
+    def sync_height_to_lines(self):
+        line_count = max(1, len(self.title_lines()))
+        line_height = QFontMetrics(self.font()).lineSpacing()
+        height = line_height * line_count + 6
+        if self.minimumHeight() != height or self.maximumHeight() != height:
+            self.setMinimumHeight(height)
+            self.setMaximumHeight(height)
+            self.updateGeometry()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
+        painter.setFont(self.font())
+        metrics = QFontMetrics(self.font())
+        line_height = metrics.lineSpacing()
+        baseline = metrics.ascent() + 2
+        char_index = 0
+
+        for line_index, line in enumerate(self.title_lines()):
+            y = baseline + line_index * line_height
+            if not self.shimmer_active:
+                painter.setPen(QColor("#78818b"))
+                painter.drawText(0, y, line)
+                continue
+
+            x = 0
+            for char in line:
+                distance = min(
+                    abs(char_index - self.shimmer_index),
+                    max(1, len(self.title_text)) - abs(char_index - self.shimmer_index),
+                )
+                if distance < 0.45:
+                    color = "#e9f2fc"
+                elif distance < 1.4:
+                    color = "#c4cfda"
+                elif distance < 2.4:
+                    color = "#96a1ad"
+                else:
+                    color = "#78818b"
+                painter.setPen(QColor(color))
+                painter.drawText(x, y, char)
+                x += metrics.horizontalAdvance(char)
+                char_index += 1
+            char_index += 1
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.render_title()
+
+    def preferred_width_for(self, available_width):
+        metrics = QFontMetrics(self.font())
+        full_width = metrics.horizontalAdvance(" ".join(self.title_text.split())) + 8
+        return min(max(24, int(available_width)), full_width)
+
+class ThinkingPhaseHeader(QWidget):
+    toggled = pyqtSignal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("thinkingPhaseHeader")
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+
+        self.title_label = ThinkingTitleLabel()
+        self.title_label.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.title_label.installEventFilter(self)
+        layout.addWidget(self.title_label, 0, Qt.AlignmentFlag.AlignVCenter)
+
+        self.arrow_button = RotatingSvgButton(ARROW_RIGHT_ICON_PATH)
+        self.arrow_button.setObjectName("thinkingArrowButton")
+        self.arrow_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.arrow_button.clicked.connect(self.toggled.emit)
+        layout.addWidget(self.arrow_button, 0, Qt.AlignmentFlag.AlignVCenter)
+
+        self.timer_label = QLabel("0s")
+        self.timer_label.setObjectName("thinkingTimerLabel")
+        self.timer_label.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.timer_label.installEventFilter(self)
+        layout.addWidget(self.timer_label, 0, Qt.AlignmentFlag.AlignVCenter)
+        layout.addStretch()
+
+    def set_title(self, title):
+        self.title_label.set_title(title)
+        self.update_title_width()
+        QTimer.singleShot(0, self.update_title_width)
+
+    def set_elapsed_text(self, text):
+        self.timer_label.setText(text)
+        self.update_title_width()
+        QTimer.singleShot(0, self.update_title_width)
+
+    def set_expanded(self, expanded):
+        self.arrow_button.set_rotation(90 if expanded else 0)
+
+    def set_active(self, active):
+        self.title_label.set_shimmer_active(active)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.toggled.emit()
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def eventFilter(self, watched, event):
+        if event.type() == QEvent.Type.MouseButtonPress and event.button() == Qt.MouseButton.LeftButton:
+            self.toggled.emit()
+            return True
+        return super().eventFilter(watched, event)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.update_title_width()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self.update_title_width()
+        QTimer.singleShot(0, self.update_title_width)
+
+    def update_title_width(self):
+        reserved = self.arrow_button.width() + self.timer_label.sizeHint().width() + 28
+        available = max(120, self.width() - reserved)
+        title_width = min(available, self.title_label.preferred_width_for(available))
+        self.title_label.setFixedWidth(max(24, title_width))
+        self.title_label.render_title()
 
 class AutoResizingTextEdit(QPlainTextEdit):
     send_requested = pyqtSignal()
@@ -809,6 +1043,11 @@ class TerminalCommandBlock(QFrame):
         self.expanded = True
         self.panel_animation = None
         self.run_label = "Running"
+        self.started_at = time.monotonic()
+        self.ended_at = None
+        self.elapsed_timer = QTimer(self)
+        self.elapsed_timer.setInterval(1000)
+        self.elapsed_timer.timeout.connect(self.update_terminal_timer)
 
         self.setObjectName("terminalRunBlock")
         layout = QVBoxLayout(self)
@@ -823,15 +1062,19 @@ class TerminalCommandBlock(QFrame):
         self.toggle_button.setObjectName("terminalRunButton")
         self.toggle_button.setToolTip(command)
         self.toggle_button.setMinimumWidth(0)
-        self.toggle_button.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+        self.toggle_button.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
         self.toggle_button.clicked.connect(self.toggle_expanded)
-        header.addWidget(self.toggle_button, 1)
+        header.addWidget(self.toggle_button, 0)
 
         self.arrow_button = RotatingSvgButton(ARROW_RIGHT_ICON_PATH)
         self.arrow_button.setObjectName("terminalArrowButton")
         self.arrow_button.setToolTip(command)
         self.arrow_button.clicked.connect(self.toggle_expanded)
         header.addWidget(self.arrow_button)
+
+        self.timer_label = QLabel("0s")
+        self.timer_label.setObjectName("terminalTimerLabel")
+        header.addWidget(self.timer_label, 0, Qt.AlignmentFlag.AlignVCenter)
         header.addStretch()
         layout.addLayout(header)
 
@@ -889,6 +1132,8 @@ class TerminalCommandBlock(QFrame):
         self.panel.setMaximumHeight(16777215)
 
         self.update_toggle_text()
+        self.update_terminal_timer()
+        self.elapsed_timer.start()
 
     def toggle_expanded(self):
         self.set_expanded(not self.expanded)
@@ -933,17 +1178,17 @@ class TerminalCommandBlock(QFrame):
     def update_toggle_text(self):
         command = " ".join(self.command.split())
         label = f"{self.run_label} {command}"
-        available_width = max(0, self.toggle_button.width() - 12)
-        if available_width > 24:
-            label = QFontMetrics(self.toggle_button.font()).elidedText(
-                label,
-                Qt.TextElideMode.ElideRight,
-                available_width,
-            )
-        elif len(label) > 48:
-            label = label[:45] + "..."
-        self.toggle_button.setText(label)
+        available_width = max(120, self.width() - 120)
+        lines = elided_text_lines(label, self.toggle_button.font(), available_width, max_lines=2)
+        line_height = QFontMetrics(self.toggle_button.font()).lineSpacing()
+        self.toggle_button.setMaximumWidth(available_width)
+        self.toggle_button.setMinimumHeight(line_height * len(lines) + 12)
+        self.toggle_button.setMaximumHeight(line_height * 2 + 14)
+        self.toggle_button.setText("\n".join(lines))
         self.arrow_button.set_rotation(90 if self.expanded else 0)
+
+    def update_terminal_timer(self):
+        self.timer_label.setText(format_elapsed_time_text(self.elapsed_seconds()))
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -962,11 +1207,18 @@ class TerminalCommandBlock(QFrame):
 
     def finish(self, status):
         self.run_label = "Ran"
+        self.ended_at = time.monotonic()
+        self.elapsed_timer.stop()
+        self.update_terminal_timer()
         self.status_label.setText(status)
         if not self.log.toPlainText().strip():
             self.append_log("(no output)\n")
         self.update_toggle_text()
         self.set_expanded(False)
+
+    def elapsed_seconds(self):
+        ended_at = self.ended_at or time.monotonic()
+        return max(0.0, ended_at - self.started_at)
 
 class AssistantCodeHighlighter(QSyntaxHighlighter):
     PYTHON_TRIPLE_SINGLE_STATE = 1
@@ -1352,6 +1604,9 @@ class MessageCard(QFrame):
         self.loading_active = False
         self.timeline_phases = []
         self.active_stream_phase = None
+        self.final_answer_pending = False
+        self.final_answer_phase = None
+        self.work_summary_phase = None
         self.loading_placeholder = None
         self.code_sticky_content_padding = max(0, int(code_sticky_content_padding))
         self.render_debounce_enabled = bool(render_debounce_enabled)
@@ -1478,11 +1733,15 @@ class MessageCard(QFrame):
     def reset_timeline_from_text(self, text):
         if self.body_layout is None:
             return
+        self.cleanup_timeline_phases()
         self.clear_layout(self.body_layout)
         self.timeline_phases = []
         self.terminal_blocks = []
         self.current_terminal_block = None
         self.active_stream_phase = None
+        self.final_answer_pending = False
+        self.final_answer_phase = None
+        self.work_summary_phase = None
         self.loading_placeholder = None
 
         text = text or ""
@@ -1497,43 +1756,62 @@ class MessageCard(QFrame):
         self.refresh_loading_placeholder()
         self.body.setVisible(self.body_layout.count() > 0)
 
-    def create_content_phase(self):
+    def create_content_phase(self, final=False):
         widget = QWidget()
         layout = QVBoxLayout(widget)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(10)
         widget.setVisible(False)
-        phase = {"type": "content", "text": "", "widget": widget, "layout": layout}
+        phase = {"type": "content", "text": "", "widget": widget, "layout": layout, "final": bool(final)}
         self.timeline_phases.append(phase)
         self.body_layout.addWidget(widget)
         return phase
 
-    def create_thinking_phase(self):
+    def create_thinking_phase(self, expanded=False):
         widget = QWidget()
-        widget.hide()
-        widget.setMaximumHeight(0)
         layout = QVBoxLayout(widget)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(8)
 
-        label = QLabel("Thinking")
-        label.setObjectName("sectionLabel")
-        layout.addWidget(label)
+        header = ThinkingPhaseHeader()
+        layout.addWidget(header)
 
         body = AutoHeightTextBrowser()
         body.document().setDefaultStyleSheet(THINKING_MARKDOWN_STYLESHEET)
         body.setMaximumHeight(16777215)
-        layout.addWidget(body)
+
+        body_container = QWidget()
+        body_container_layout = QVBoxLayout(body_container)
+        body_container_layout.setContentsMargins(0, 0, 0, 0)
+        body_container_layout.setSpacing(0)
+        body_container_layout.addWidget(body)
+        body_container.hide()
+        body_container.setMaximumHeight(0)
+        layout.addWidget(body_container)
 
         phase = {
             "type": "thinking",
             "text": "",
             "widget": widget,
-            "label": label,
+            "header": header,
             "body": body,
-            "visible": False,
-            "animation": None,
+            "body_container": body_container,
+            "expanded": bool(expanded),
+            "active": True,
+            "started_at": time.monotonic(),
+            "ended_at": None,
+            "body_animation": None,
+            "timer": None,
         }
+        timer = QTimer(self)
+        timer.setInterval(250)
+        timer.timeout.connect(lambda phase=phase: self.update_thinking_phase_timer(phase))
+        phase["timer"] = timer
+        timer.start()
+        header.toggled.connect(lambda phase=phase: self.toggle_thinking_phase(phase))
+        header.set_expanded(False)
+        header.set_active(True)
+        self.update_thinking_phase_timer(phase)
         self.timeline_phases.append(phase)
         self.body_layout.addWidget(widget)
         return phase
@@ -1546,6 +1824,7 @@ class MessageCard(QFrame):
         return phase
 
     def remove_phase(self, phase):
+        self.cleanup_timeline_phase(phase)
         widget = phase.get("widget")
         if widget is not None:
             self.remove_widget_from_layout(self.body_layout, widget)
@@ -1558,6 +1837,8 @@ class MessageCard(QFrame):
     def phase_has_visible_content(self, phase):
         if phase.get("type") == "terminal":
             return True
+        if phase.get("type") == "work_summary":
+            return bool(phase.get("children"))
         if phase.get("type") == "content":
             return bool(self.assistant_segments(phase.get("text", "")))
         return False
@@ -1572,65 +1853,423 @@ class MessageCard(QFrame):
         self.render_assistant_content(layout, phase.get("text", ""))
         phase["widget"].setVisible(layout.count() > 0)
 
-    def render_thinking_phase(self, phase, visible):
+    def render_thinking_phase(self, phase):
         has_text = bool(phase.get("text", "").strip())
-        should_show = visible and has_text
-        if visible and has_text:
-            phase["body"].setHtml(prepare_assistant_html(
-                render_inert_thinking_terminal_tags(phase["text"])
-            ))
-            phase["body"].update_height()
-        self.animate_thinking_phase_visibility(phase, should_show)
-
-    def animate_thinking_phase_visibility(self, phase, visible):
         widget = phase.get("widget")
-        if widget is None:
+        body = phase.get("body")
+        body_container = phase.get("body_container")
+        header = phase.get("header")
+        if widget is None or body is None or body_container is None or header is None:
+            return
+        widget.setVisible(has_text)
+        if not has_text:
             return
 
-        if phase.get("animation") is not None:
-            phase["animation"].stop()
-            phase["animation"] = None
-
-        currently_visible = bool(phase.get("visible"))
-        if currently_visible == bool(visible):
-            widget.setVisible(visible)
-            if visible:
-                widget.setMaximumHeight(16777215)
-            return
-
-        phase["visible"] = bool(visible)
-        if visible:
-            widget.show()
-            widget.setMaximumHeight(0)
-            start_height = 0
-            end_height = max(1, widget.sizeHint().height())
+        body.setHtml(prepare_assistant_html(
+            render_inert_thinking_terminal_tags(phase["text"])
+        ))
+        body.update_height()
+        header.set_title(self.thinking_phase_title(phase.get("text", "")))
+        header.set_active(bool(phase.get("active")))
+        self.update_thinking_phase_timer(phase)
+        if phase.get("expanded"):
+            body_container.show()
+            body_container.setMaximumHeight(16777215)
         else:
-            start_height = max(1, widget.height())
+            body_container.hide()
+            body_container.setMaximumHeight(0)
+        header.set_expanded(bool(phase.get("expanded")))
+
+    def toggle_thinking_phase(self, phase):
+        if phase.get("type") != "thinking":
+            return
+        self.set_thinking_phase_expanded(phase, not bool(phase.get("expanded")))
+
+    def set_thinking_phase_expanded(self, phase, expanded):
+        self.set_collapsible_phase_expanded(phase, expanded)
+
+    def set_collapsible_phase_expanded(self, phase, expanded):
+        body = phase.get("body_container")
+        header = phase.get("header")
+        if body is None or header is None:
+            return
+        expanded = bool(expanded)
+        if phase.get("expanded") == expanded:
+            return
+
+        if phase.get("body_animation") is not None:
+            phase["body_animation"].stop()
+            phase["body_animation"] = None
+
+        phase["expanded"] = expanded
+        header.set_expanded(expanded)
+        if expanded:
+            body.show()
+            body.setMaximumHeight(0)
+            start_height = 0
+            end_height = max(1, body.sizeHint().height())
+        else:
+            start_height = max(1, body.height())
             end_height = 0
 
-        animation = QPropertyAnimation(widget, b"maximumHeight", self)
+        animation = QPropertyAnimation(body, b"maximumHeight", self)
         animation.setDuration(180)
         animation.setEasingCurve(QEasingCurve.Type.InOutCubic)
         animation.setStartValue(start_height)
         animation.setEndValue(end_height)
         animation.finished.connect(
-            lambda phase=phase, visible=visible: self.finish_thinking_phase_animation(phase, visible)
+            lambda phase=phase, expanded=expanded: self.finish_thinking_body_animation(phase, expanded)
         )
-        phase["animation"] = animation
+        phase["body_animation"] = animation
         animation.start()
 
-    def finish_thinking_phase_animation(self, phase, visible):
-        widget = phase.get("widget")
-        if widget is None:
+    def finish_thinking_body_animation(self, phase, expanded):
+        body = phase.get("body_container")
+        if body is None:
             return
-        phase["animation"] = None
-        if visible:
-            widget.setMaximumHeight(16777215)
-            widget.show()
+        phase["body_animation"] = None
+        if expanded:
+            body.setMaximumHeight(16777215)
+            body.show()
         else:
-            widget.hide()
-            widget.setMaximumHeight(0)
+            body.hide()
+            body.setMaximumHeight(0)
         self.body.setVisible(self.body_layout.count() > 0)
+
+    def thinking_phase_title(self, text):
+        cleaned = re.sub(r"</?terminal_command[^>]*>", " ", text or "", flags=re.IGNORECASE)
+        cleaned = re.sub(r"`{1,3}", " ", cleaned)
+        for line in cleaned.splitlines():
+            line = re.sub(r"^[\s#>*-]+", "", line).strip()
+            line = re.sub(r"\s+", " ", line)
+            if len(line) >= 3:
+                title = re.split(r"(?<=[.!?])\s+", line, maxsplit=1)[0].strip()
+                return title or "Analyzing request"
+        return "Analyzing request"
+
+    def update_thinking_phase_timer(self, phase):
+        header = phase.get("header")
+        started_at = phase.get("started_at")
+        if header is None or started_at is None:
+            return
+        ended_at = phase.get("ended_at") or time.monotonic()
+        header.set_elapsed_text(self.format_elapsed_time(ended_at - started_at))
+
+    def format_elapsed_time(self, elapsed):
+        return format_elapsed_time_text(elapsed)
+
+    def finish_thinking_phase(self, phase):
+        if phase.get("type") != "thinking" or not phase.get("active"):
+            return
+        phase["active"] = False
+        phase["ended_at"] = time.monotonic()
+        timer = phase.get("timer")
+        if timer is not None:
+            timer.stop()
+        header = phase.get("header")
+        if header is not None:
+            header.set_active(False)
+        self.update_thinking_phase_timer(phase)
+
+    def finish_active_thinking_phase(self):
+        phase = self.active_stream_phase
+        if phase is not None and phase.get("type") == "thinking":
+            self.finish_thinking_phase(phase)
+
+    def finish_streaming(self):
+        self.finish_active_thinking_phase()
+
+    def mark_final_answer_started(self):
+        if self.role != "assistant":
+            return
+        if self.render_timer is not None and self.render_timer.isActive():
+            self.flush_pending_render()
+        self.finish_active_thinking_phase()
+        self.final_answer_pending = True
+        self.active_stream_phase = None
+        self.refresh_loading_placeholder()
+        self.notify_assistant_content_changed()
+
+    def cancel_pending_final_answer(self):
+        self.final_answer_pending = False
+        if self.final_answer_phase is not None:
+            self.final_answer_phase["final"] = False
+        self.unwrap_work_summary_phase()
+        self.final_answer_phase = None
+
+    def confirm_final_answer(self):
+        if self.role != "assistant":
+            return
+        if self.render_timer is not None and self.render_timer.isActive():
+            self.flush_pending_render()
+        final_phase = self.final_answer_phase
+        if final_phase is None or final_phase not in self.timeline_phases:
+            self.final_answer_pending = False
+            return
+        self.ensure_work_summary_for_final(final_phase)
+        self.final_answer_pending = False
+        self.refresh_loading_placeholder()
+        self.notify_assistant_content_changed()
+
+    def ensure_work_summary_for_final(self, final_phase):
+        if self.work_summary_phase is not None:
+            return
+        if final_phase is None or final_phase not in self.timeline_phases:
+            return
+
+        final_index = self.timeline_phases.index(final_phase)
+        previous_phases = [
+            phase for phase in self.timeline_phases[:final_index]
+            if phase.get("type") in {"content", "thinking", "terminal"}
+        ]
+        work_phases = [phase for phase in previous_phases if self.phase_has_work_content(phase)]
+        for phase in previous_phases:
+            if phase not in work_phases:
+                self.remove_phase_widget(phase)
+                if phase in self.timeline_phases:
+                    self.timeline_phases.remove(phase)
+        if work_phases:
+            summary_phase = self.create_work_summary_phase(work_phases)
+            tail_phases = [phase for phase in self.timeline_phases if phase not in previous_phases]
+            self.timeline_phases = [summary_phase, *tail_phases]
+            self.work_summary_phase = summary_phase
+
+    def unwrap_work_summary_phase(self):
+        summary_phase = self.work_summary_phase
+        if summary_phase is None:
+            return
+        summary_widget = summary_phase.get("widget")
+        body_container = summary_phase.get("body_container")
+        body_layout = body_container.layout() if body_container is not None else None
+        children = list(summary_phase.get("children", []))
+        insert_index = self.layout_widget_index(self.body_layout, summary_widget)
+        if insert_index < 0:
+            insert_index = 0
+
+        animation = summary_phase.get("body_animation")
+        if animation is not None:
+            animation.stop()
+        header = summary_phase.get("header")
+        if header is not None:
+            header.set_active(False)
+
+        for child_phase in children:
+            current_widget = child_phase.get("widget")
+            if body_layout is not None and current_widget is not None:
+                self.remove_widget_from_layout(body_layout, current_widget)
+            child_widget = self.restore_work_child_phase(child_phase)
+            if child_widget is not None:
+                self.body_layout.insertWidget(insert_index, child_widget)
+                child_widget.show()
+                insert_index += 1
+
+        if summary_widget is not None and self.remove_widget_from_layout(self.body_layout, summary_widget):
+            summary_widget.deleteLater()
+        if summary_phase in self.timeline_phases:
+            summary_index = self.timeline_phases.index(summary_phase)
+            self.timeline_phases[summary_index:summary_index + 1] = children
+        self.work_summary_phase = None
+        self.refresh_loading_placeholder()
+        self.notify_assistant_content_changed()
+
+    def restore_work_child_phase(self, phase):
+        if not phase.get("wrapped_for_work"):
+            return phase.get("widget")
+
+        wrapper = phase.get("widget")
+        content_widget = phase.get("content_widget")
+        body_container = phase.get("body_container")
+        body_layout = body_container.layout() if body_container is not None else None
+        if body_layout is not None and content_widget is not None:
+            self.remove_widget_from_layout(body_layout, content_widget)
+        if wrapper is not None:
+            wrapper.deleteLater()
+
+        phase["widget"] = content_widget
+        for key in ("content_widget", "header", "body_container", "expanded", "body_animation", "wrapped_for_work"):
+            phase.pop(key, None)
+        if content_widget is not None:
+            content_widget.show()
+        return content_widget
+
+    def remove_phase_widget(self, phase):
+        self.cleanup_timeline_phase(phase)
+        widget = phase.get("widget")
+        if widget is not None and self.remove_widget_from_layout(self.body_layout, widget):
+            widget.deleteLater()
+
+    def create_work_summary_phase(self, child_phases):
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+
+        header = ThinkingPhaseHeader()
+        header.set_title("Worked")
+        header.set_active(False)
+        header.set_elapsed_text(self.format_elapsed_time(
+            sum(self.phase_elapsed_seconds(phase) for phase in child_phases)
+        ))
+        layout.addWidget(header)
+
+        body_container = QWidget()
+        body_layout = QVBoxLayout(body_container)
+        body_layout.setContentsMargins(0, 0, 0, 0)
+        body_layout.setSpacing(8)
+        body_container.hide()
+        body_container.setMaximumHeight(0)
+        layout.addWidget(body_container)
+
+        phase = {
+            "type": "work_summary",
+            "widget": widget,
+            "header": header,
+            "body_container": body_container,
+            "children": child_phases,
+            "expanded": False,
+            "body_animation": None,
+        }
+        header.set_expanded(False)
+        header.toggled.connect(lambda phase=phase: self.toggle_collapsible_phase(phase))
+
+        insert_index = self.layout_widget_index(self.body_layout, child_phases[0].get("widget"))
+        if insert_index < 0:
+            self.body_layout.addWidget(widget)
+        else:
+            self.body_layout.insertWidget(insert_index, widget)
+
+        for child_phase in child_phases:
+            child_widget = self.prepare_work_child_phase(child_phase)
+            if child_widget is None:
+                continue
+            self.remove_widget_from_layout(self.body_layout, child_widget)
+            body_layout.addWidget(child_widget)
+            child_widget.show()
+
+        return phase
+
+    def prepare_work_child_phase(self, phase):
+        phase_type = phase.get("type")
+        if phase_type == "thinking":
+            self.set_thinking_phase_expanded(phase, False)
+            return phase.get("widget")
+        if phase_type == "terminal":
+            block = phase.get("widget")
+            if hasattr(block, "set_expanded"):
+                block.set_expanded(False)
+            return block
+        if phase_type == "content":
+            return self.wrap_content_phase_for_work(phase)
+        return phase.get("widget")
+
+    def wrap_content_phase_for_work(self, phase):
+        content_widget = phase.get("widget")
+        if content_widget is None:
+            return None
+
+        wrapper = QWidget()
+        wrapper_layout = QVBoxLayout(wrapper)
+        wrapper_layout.setContentsMargins(0, 0, 0, 0)
+        wrapper_layout.setSpacing(8)
+
+        header = ThinkingPhaseHeader()
+        header.set_title(self.content_phase_title(phase.get("text", "")))
+        header.set_active(False)
+        header.set_elapsed_text("")
+        wrapper_layout.addWidget(header)
+
+        body_container = QWidget()
+        body_layout = QVBoxLayout(body_container)
+        body_layout.setContentsMargins(0, 0, 0, 0)
+        body_layout.setSpacing(0)
+        self.remove_widget_from_layout(self.body_layout, content_widget)
+        body_layout.addWidget(content_widget)
+        body_container.hide()
+        body_container.setMaximumHeight(0)
+        wrapper_layout.addWidget(body_container)
+
+        phase.update({
+            "widget": wrapper,
+            "content_widget": content_widget,
+            "header": header,
+            "body_container": body_container,
+            "expanded": False,
+            "body_animation": None,
+            "wrapped_for_work": True,
+        })
+        header.set_expanded(False)
+        header.toggled.connect(lambda phase=phase: self.toggle_collapsible_phase(phase))
+        return wrapper
+
+    def toggle_collapsible_phase(self, phase):
+        self.set_collapsible_phase_expanded(phase, not bool(phase.get("expanded")))
+
+    def content_phase_title(self, text):
+        text = normalize_terminal_fences(replace_terminal_command_tags(text or ""))
+        for line in text.splitlines():
+            title = re.sub(r"^[\s#>*-]+", "", line).strip()
+            title = re.sub(r"\s+", " ", title)
+            if title:
+                return title[:96] + ("..." if len(title) > 96 else "")
+        return "Progress note"
+
+    def phase_has_work_content(self, phase):
+        phase_type = phase.get("type")
+        if phase_type == "terminal":
+            return True
+        if phase_type == "thinking":
+            return bool(phase.get("text", "").strip())
+        if phase_type == "content":
+            return self.phase_has_visible_content(phase)
+        return False
+
+    def phase_elapsed_seconds(self, phase):
+        if phase.get("type") == "thinking":
+            started_at = phase.get("started_at")
+            if started_at is None:
+                return 0.0
+            return max(0.0, (phase.get("ended_at") or time.monotonic()) - started_at)
+        if phase.get("type") == "terminal":
+            block = phase.get("widget")
+            if hasattr(block, "elapsed_seconds"):
+                return block.elapsed_seconds()
+        return 0.0
+
+    def layout_widget_index(self, layout, target):
+        if layout is None or target is None:
+            return -1
+        for index in range(layout.count()):
+            item = layout.itemAt(index)
+            if item is not None and item.widget() is target:
+                return index
+        return -1
+
+    def set_active_thinking_auto_expanded(self, expanded):
+        if self.role != "assistant":
+            return
+        for phase in self.timeline_phases:
+            if phase.get("type") == "thinking" and phase.get("active"):
+                self.set_thinking_phase_expanded(phase, expanded)
+
+    def cleanup_timeline_phase(self, phase):
+        if phase.get("type") == "work_summary":
+            for child_phase in phase.get("children", []):
+                self.cleanup_timeline_phase(child_phase)
+        if phase.get("type") not in {"thinking", "content", "work_summary"}:
+            return
+        timer = phase.get("timer")
+        if timer is not None:
+            timer.stop()
+        animation = phase.get("body_animation")
+        if animation is not None:
+            animation.stop()
+        header = phase.get("header")
+        if header is not None:
+            header.set_active(False)
+
+    def cleanup_timeline_phases(self):
+        for phase in self.timeline_phases:
+            self.cleanup_timeline_phase(phase)
 
     def ensure_loading_placeholder(self):
         if self.loading_placeholder is None:
@@ -1793,8 +2432,18 @@ class MessageCard(QFrame):
         if self.role == "assistant":
             self.raw_text += token
             if self.active_stream_phase is None or self.active_stream_phase.get("type") != "content":
-                self.active_stream_phase = self.create_content_phase()
+                self.finish_active_thinking_phase()
+                self.active_stream_phase = self.create_content_phase(final=self.final_answer_pending)
+                if self.final_answer_pending:
+                    self.final_answer_phase = self.active_stream_phase
+                    self.final_answer_pending = False
             self.active_stream_phase["text"] += token
+            if (
+                self.active_stream_phase is self.final_answer_phase
+                and self.work_summary_phase is None
+                and self.phase_has_visible_content(self.final_answer_phase)
+            ):
+                self.ensure_work_summary_for_final(self.final_answer_phase)
             if self.render_debounce_enabled and self.render_timer is not None:
                 self.pending_render_text = self.active_stream_phase["text"]
                 if self.render_debounce_interval_ms <= 0:
@@ -1811,8 +2460,10 @@ class MessageCard(QFrame):
     def start_terminal_command(self, command, shell_name):
         if self.role != "assistant" or self.terminal_blocks_layout is None:
             return
+        self.cancel_pending_final_answer()
         if self.render_timer is not None and self.render_timer.isActive():
             self.flush_pending_render()
+        self.finish_active_thinking_phase()
         block = TerminalCommandBlock(command, shell_name)
         self.terminal_blocks.append(block)
         self.current_terminal_block = block
@@ -1842,18 +2493,9 @@ class MessageCard(QFrame):
         if self.render_timer is not None and self.render_timer.isActive():
             self.flush_pending_render()
         if self.active_stream_phase is None or self.active_stream_phase.get("type") != "thinking":
-            self.active_stream_phase = self.create_thinking_phase()
+            self.active_stream_phase = self.create_thinking_phase(expanded=visible)
         self.active_stream_phase["text"] += token
-        self.render_thinking_phase(self.active_stream_phase, visible)
-        self.refresh_loading_placeholder()
-        self.notify_assistant_content_changed()
-
-    def set_thinking_visibility(self, visible):
-        if self.role != "assistant":
-            return
-        for phase in self.timeline_phases:
-            if phase.get("type") == "thinking":
-                self.render_thinking_phase(phase, visible)
+        self.render_thinking_phase(self.active_stream_phase)
         self.refresh_loading_placeholder()
         self.notify_assistant_content_changed()
 

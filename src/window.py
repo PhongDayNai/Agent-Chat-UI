@@ -1123,7 +1123,7 @@ class AgentChatWindow(
         thinking_row = QHBoxLayout()
         thinking_row.setContentsMargins(0, 0, 0, 0)
         thinking_row.setSpacing(10)
-        thinking_row.addWidget(QLabel("Show thinking"), 0, Qt.AlignmentFlag.AlignVCenter)
+        thinking_row.addWidget(QLabel("Auto-expand thinking"), 0, Qt.AlignmentFlag.AlignVCenter)
         thinking_row.addStretch()
         self.show_thinking_checkbox = SwitchPill(self.show_thinking)
         self.show_thinking_checkbox.setChecked(self.show_thinking)

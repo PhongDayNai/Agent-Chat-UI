@@ -181,6 +181,32 @@ QLabel#sectionLabel {
     color: #8c9298;
     letter-spacing: 0.03em;
 }
+QWidget#thinkingPhaseHeader {
+    background: transparent;
+}
+QLabel#thinkingTimerLabel {
+    color: #6f7780;
+    font-size: 9pt;
+    font-weight: 600;
+}
+QLabel#terminalTimerLabel {
+    color: #6f7780;
+    font-size: 9pt;
+    font-weight: 600;
+}
+QPushButton#thinkingArrowButton {
+    min-width: 26px;
+    max-width: 26px;
+    min-height: 26px;
+    max-height: 26px;
+    padding: 0;
+    border: none;
+    background: transparent;
+    color: #6f7780;
+}
+QPushButton#thinkingArrowButton:hover {
+    color: #c5ccd4;
+}
 QLabel#sidebarGroupLabel {
     font-size: 11.5pt;
     font-weight: 800;

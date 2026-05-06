@@ -284,6 +284,9 @@ class ChatFlowMixin:
         self.worker.terminal_log_received.connect(self.on_terminal_log_received)
         self.worker.terminal_command_finished.connect(self.on_terminal_command_finished)
         self.worker.terminal_permission_requested.connect(self.on_terminal_permission_requested)
+        self.worker.final_answer_started.connect(self.on_final_answer_started)
+        self.worker.final_answer_cancelled.connect(self.on_final_answer_cancelled)
+        self.worker.final_answer_confirmed.connect(self.on_final_answer_confirmed)
         self.worker.generation_started.connect(self.on_generation_started)
         self.worker.generation_finished.connect(self.on_generation_finished)
         self.worker.error_occurred.connect(self.on_error)
@@ -860,9 +863,28 @@ class ChatFlowMixin:
         if should_focus_reply:
             self.scroll_to_assistant_reply()
 
+    def on_final_answer_started(self):
+        should_focus_reply = self.assistant_reply_focus_active
+        if self.current_assistant_card is not None:
+            self.current_assistant_card.mark_final_answer_started()
+        if should_focus_reply:
+            self.scroll_to_assistant_reply()
+
+    def on_final_answer_cancelled(self):
+        if self.current_assistant_card is not None:
+            self.current_assistant_card.cancel_pending_final_answer()
+
+    def on_final_answer_confirmed(self):
+        should_focus_reply = self.assistant_reply_focus_active
+        if self.current_assistant_card is not None:
+            self.current_assistant_card.confirm_final_answer()
+        if should_focus_reply:
+            self.scroll_to_assistant_reply()
+
     def on_generation_finished(self, success, stopped, full_response, _full_thinking):
         if self.current_assistant_card is not None:
             self.current_assistant_card.flush_pending_render()
+            self.current_assistant_card.finish_streaming()
             self.current_assistant_card.stop_loading()
         self.context_usage_completion_text = full_response or self.context_usage_completion_text
         self.update_streaming_context_usage_tokens(force=True)
@@ -960,7 +982,7 @@ class ChatFlowMixin:
             item = self.messages_layout.itemAt(index)
             widget = item.widget()
             if isinstance(widget, MessageCard):
-                widget.set_thinking_visibility(visible)
+                widget.set_active_thinking_auto_expanded(visible)
 
     def update_empty_state(self):
         if hasattr(self, "empty_title") and hasattr(self, "empty_body"):
