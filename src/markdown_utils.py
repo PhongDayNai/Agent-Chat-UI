@@ -504,6 +504,17 @@ def normalize_terminal_fences(text):
     return re.sub(r"```terminal[\s\S]*$", "", text, flags=re.IGNORECASE)
 
 
+def render_inert_thinking_terminal_tags(text):
+    def replacement(match):
+        command = (match.group(1) or match.group(2) or "").strip()
+        if not command:
+            return "[terminal command considered]"
+        command = command.replace("`", "'")
+        return f"[terminal command considered: `{command}`]"
+
+    return TERMINAL_COMMAND_RE.sub(replacement, text or "")
+
+
 def split_assistant_terminal_text(text):
     text = text or "..."
     matches = list(TERMINAL_COMMAND_RE.finditer(text))
@@ -511,9 +522,8 @@ def split_assistant_terminal_text(text):
         return text, ""
 
     first = matches[0]
-    last = matches[-1]
     before = text[:first.start()]
-    after = text[last.end():]
+    after = text[first.end():]
     return before, after
 
 

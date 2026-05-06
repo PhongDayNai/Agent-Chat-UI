@@ -12,6 +12,7 @@ from PyQt6.QtGui import (
     QColor,
     QDesktopServices,
     QFont,
+    QFontMetrics,
     QGuiApplication,
     QIcon,
     QImage,
@@ -57,11 +58,11 @@ from markdown_utils import (
     normalize_terminal_fences,
     prepare_assistant_html,
     render_latexish_text,
+    render_inert_thinking_terminal_tags,
     replace_terminal_command_tags,
-    split_assistant_terminal_text,
     split_markdown_code_segments,
 )
-from styles import MARKDOWN_STYLESHEET
+from styles import MARKDOWN_STYLESHEET, THINKING_MARKDOWN_STYLESHEET
 
 class DeletableHistoryDelegate(QStyledItemDelegate):
     def __init__(self, parent=None):
@@ -436,8 +437,10 @@ class AutoHeightTextBrowser(QTextBrowser):
         super().__init__(parent)
         self.document().documentLayout().documentSizeChanged.connect(self.update_height)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        self.setMinimumWidth(0)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setWordWrapMode(QTextOption.WrapMode.WrapAtWordBoundaryOrAnywhere)
         self.setFrameStyle(QFrame.Shape.NoFrame)
         self.setOpenExternalLinks(False)
         self.setOpenLinks(False)
@@ -819,8 +822,10 @@ class TerminalCommandBlock(QFrame):
         self.toggle_button = QPushButton()
         self.toggle_button.setObjectName("terminalRunButton")
         self.toggle_button.setToolTip(command)
+        self.toggle_button.setMinimumWidth(0)
+        self.toggle_button.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
         self.toggle_button.clicked.connect(self.toggle_expanded)
-        header.addWidget(self.toggle_button, 0)
+        header.addWidget(self.toggle_button, 1)
 
         self.arrow_button = RotatingSvgButton(ARROW_RIGHT_ICON_PATH)
         self.arrow_button.setObjectName("terminalArrowButton")
@@ -862,6 +867,8 @@ class TerminalCommandBlock(QFrame):
         self.command_label.setObjectName("terminalCommand")
         self.command_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self.command_label.setWordWrap(True)
+        self.command_label.setMinimumWidth(0)
+        self.command_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         command_row.addWidget(self.command_label, 1)
 
         self.copy_command_button = SvgActionButton(COPY_ICON_PATH)
@@ -925,10 +932,22 @@ class TerminalCommandBlock(QFrame):
 
     def update_toggle_text(self):
         command = " ".join(self.command.split())
-        if len(command) > 110:
-            command = command[:107] + "..."
-        self.toggle_button.setText(f"{self.run_label} {command}")
+        label = f"{self.run_label} {command}"
+        available_width = max(0, self.toggle_button.width() - 12)
+        if available_width > 24:
+            label = QFontMetrics(self.toggle_button.font()).elidedText(
+                label,
+                Qt.TextElideMode.ElideRight,
+                available_width,
+            )
+        elif len(label) > 48:
+            label = label[:45] + "..."
+        self.toggle_button.setText(label)
         self.arrow_button.set_rotation(90 if self.expanded else 0)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.update_toggle_text()
 
     def copy_command(self):
         QGuiApplication.clipboard().setText(self.command)
@@ -1145,10 +1164,11 @@ class AssistantCodeTextEdit(QPlainTextEdit):
 
 
 class AssistantCodeBlock(QFrame):
-    def __init__(self, code, language="", parent=None):
+    def __init__(self, code, language="", content_padding=CODE_STICKY_CONTENT_PADDING, parent=None):
         super().__init__(parent)
         self.code = code.rstrip("\n")
         self.language = self.display_language(language)
+        self.content_padding = max(0, int(content_padding))
         self.setObjectName("assistantCodeBlock")
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
 
@@ -1175,7 +1195,7 @@ class AssistantCodeBlock(QFrame):
         copy_button.clicked.connect(self.copy_code)
         header.addWidget(copy_button, 0, Qt.AlignmentFlag.AlignTop)
         layout.addLayout(header)
-        layout.addSpacing(CODE_STICKY_CONTENT_PADDING)
+        layout.addSpacing(self.content_padding)
 
         self.editor = AssistantCodeTextEdit()
         self.editor.setObjectName("assistantCodeText")
@@ -1258,11 +1278,11 @@ class AssistantCodeBlock(QFrame):
 
 
 class StickyCodeHeader(QFrame):
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, header_height=CODE_STICKY_HEADER_HEIGHT):
         super().__init__(parent)
         self.code_block = None
         self.setObjectName("stickyCodeHeader")
-        self.setFixedHeight(CODE_STICKY_HEADER_HEIGHT)
+        self.set_header_height(header_height)
         self.hide()
 
         layout = QHBoxLayout(self)
@@ -1288,6 +1308,9 @@ class StickyCodeHeader(QFrame):
         self.code_block = code_block
         self.language_label.setText(code_block.language if code_block is not None else "Code")
 
+    def set_header_height(self, header_height):
+        self.setFixedHeight(max(28, int(header_height)))
+
     def copy_code(self):
         if self.code_block is not None:
             QGuiApplication.clipboard().setText(self.code_block.code)
@@ -1310,6 +1333,7 @@ class MessageCard(QFrame):
         attachments=None,
         render_debounce_enabled=True,
         render_debounce_interval_ms=45,
+        code_sticky_content_padding=CODE_STICKY_CONTENT_PADDING,
         parent=None,
     ):
         super().__init__(parent)
@@ -1320,13 +1344,16 @@ class MessageCard(QFrame):
         self.loading_step = 0
         self.attachments = attachments or []
         self.body_layout = None
-        self.terminal_blocks_widget = None
         self.terminal_blocks_layout = None
+        self.terminal_blocks = []
         self.current_terminal_block = None
-        self.post_body = None
-        self.post_body_layout = None
         self.pending_render_text = None
         self.render_timer = None
+        self.loading_active = False
+        self.timeline_phases = []
+        self.active_stream_phase = None
+        self.loading_placeholder = None
+        self.code_sticky_content_padding = max(0, int(code_sticky_content_padding))
         self.render_debounce_enabled = bool(render_debounce_enabled)
         self.render_debounce_interval_ms = max(0, int(render_debounce_interval_ms))
 
@@ -1377,31 +1404,7 @@ class MessageCard(QFrame):
             self.body_layout.setContentsMargins(0, 0, 0, 0)
             self.body_layout.setSpacing(10)
             outer_layout.addWidget(self.body)
-
-            self.thinking_label = QLabel("Thinking")
-            self.thinking_label.setObjectName("sectionLabel")
-            self.thinking_label.hide()
-            outer_layout.addWidget(self.thinking_label)
-
-            self.thinking_body = AutoHeightTextBrowser()
-            self.thinking_body.document().setDefaultStyleSheet(MARKDOWN_STYLESHEET)
-            self.thinking_body.setMaximumHeight(16777215)
-            self.thinking_body.hide()
-            outer_layout.addWidget(self.thinking_body)
-
-            self.terminal_blocks_widget = QWidget()
-            self.terminal_blocks_layout = QVBoxLayout(self.terminal_blocks_widget)
-            self.terminal_blocks_layout.setContentsMargins(0, 0, 0, 0)
-            self.terminal_blocks_layout.setSpacing(10)
-            self.terminal_blocks_widget.hide()
-            outer_layout.addWidget(self.terminal_blocks_widget)
-
-            self.post_body = QWidget()
-            self.post_body_layout = QVBoxLayout(self.post_body)
-            self.post_body_layout.setContentsMargins(0, 0, 0, 0)
-            self.post_body_layout.setSpacing(10)
-            self.post_body.hide()
-            outer_layout.addWidget(self.post_body)
+            self.terminal_blocks_layout = self.body_layout
 
             self.loading_timer = QTimer(self)
             self.loading_timer.setInterval(320)
@@ -1451,15 +1454,7 @@ class MessageCard(QFrame):
             self.body.update_height()
 
     def render_assistant_message_text(self, text):
-        main_text, post_text = split_assistant_terminal_text(text)
-        self.render_assistant_content(self.body_layout, main_text)
-        if self.post_body is not None and self.post_body_layout is not None:
-            has_post_text = bool(post_text.strip())
-            self.post_body.setVisible(has_post_text)
-            if has_post_text:
-                self.render_assistant_content(self.post_body_layout, post_text)
-            else:
-                self.clear_layout(self.post_body_layout)
+        self.reset_timeline_from_text(text)
         self.notify_assistant_content_changed()
 
     def notify_assistant_content_changed(self):
@@ -1472,7 +1467,201 @@ class MessageCard(QFrame):
             return
         text = self.pending_render_text
         self.pending_render_text = None
+        phase = self.active_stream_phase
+        if phase is not None and phase.get("type") == "content":
+            self.render_content_phase(phase)
+            self.refresh_loading_placeholder()
+            self.notify_assistant_content_changed()
+            return
         self.render_assistant_message_text(text)
+
+    def reset_timeline_from_text(self, text):
+        if self.body_layout is None:
+            return
+        self.clear_layout(self.body_layout)
+        self.timeline_phases = []
+        self.terminal_blocks = []
+        self.current_terminal_block = None
+        self.active_stream_phase = None
+        self.loading_placeholder = None
+
+        text = text or ""
+        if text:
+            phase = self.create_content_phase()
+            phase["text"] = text
+            self.render_content_phase(phase)
+            if not self.phase_has_visible_content(phase):
+                self.remove_phase(phase)
+            else:
+                self.active_stream_phase = phase
+        self.refresh_loading_placeholder()
+        self.body.setVisible(self.body_layout.count() > 0)
+
+    def create_content_phase(self):
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
+        widget.setVisible(False)
+        phase = {"type": "content", "text": "", "widget": widget, "layout": layout}
+        self.timeline_phases.append(phase)
+        self.body_layout.addWidget(widget)
+        return phase
+
+    def create_thinking_phase(self):
+        widget = QWidget()
+        widget.hide()
+        widget.setMaximumHeight(0)
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+
+        label = QLabel("Thinking")
+        label.setObjectName("sectionLabel")
+        layout.addWidget(label)
+
+        body = AutoHeightTextBrowser()
+        body.document().setDefaultStyleSheet(THINKING_MARKDOWN_STYLESHEET)
+        body.setMaximumHeight(16777215)
+        layout.addWidget(body)
+
+        phase = {
+            "type": "thinking",
+            "text": "",
+            "widget": widget,
+            "label": label,
+            "body": body,
+            "visible": False,
+            "animation": None,
+        }
+        self.timeline_phases.append(phase)
+        self.body_layout.addWidget(widget)
+        return phase
+
+    def create_terminal_phase(self, block):
+        phase = {"type": "terminal", "widget": block}
+        self.timeline_phases.append(phase)
+        self.body_layout.addWidget(block)
+        block.show()
+        return phase
+
+    def remove_phase(self, phase):
+        widget = phase.get("widget")
+        if widget is not None:
+            self.remove_widget_from_layout(self.body_layout, widget)
+            widget.deleteLater()
+        if phase in self.timeline_phases:
+            self.timeline_phases.remove(phase)
+        if self.active_stream_phase is phase:
+            self.active_stream_phase = None
+
+    def phase_has_visible_content(self, phase):
+        if phase.get("type") == "terminal":
+            return True
+        if phase.get("type") == "content":
+            return bool(self.assistant_segments(phase.get("text", "")))
+        return False
+
+    def has_answer_or_tool_phase(self):
+        return any(self.phase_has_visible_content(phase) for phase in self.timeline_phases)
+
+    def render_content_phase(self, phase):
+        layout = phase.get("layout")
+        if layout is None:
+            return
+        self.render_assistant_content(layout, phase.get("text", ""))
+        phase["widget"].setVisible(layout.count() > 0)
+
+    def render_thinking_phase(self, phase, visible):
+        has_text = bool(phase.get("text", "").strip())
+        should_show = visible and has_text
+        if visible and has_text:
+            phase["body"].setHtml(prepare_assistant_html(
+                render_inert_thinking_terminal_tags(phase["text"])
+            ))
+            phase["body"].update_height()
+        self.animate_thinking_phase_visibility(phase, should_show)
+
+    def animate_thinking_phase_visibility(self, phase, visible):
+        widget = phase.get("widget")
+        if widget is None:
+            return
+
+        if phase.get("animation") is not None:
+            phase["animation"].stop()
+            phase["animation"] = None
+
+        currently_visible = bool(phase.get("visible"))
+        if currently_visible == bool(visible):
+            widget.setVisible(visible)
+            if visible:
+                widget.setMaximumHeight(16777215)
+            return
+
+        phase["visible"] = bool(visible)
+        if visible:
+            widget.show()
+            widget.setMaximumHeight(0)
+            start_height = 0
+            end_height = max(1, widget.sizeHint().height())
+        else:
+            start_height = max(1, widget.height())
+            end_height = 0
+
+        animation = QPropertyAnimation(widget, b"maximumHeight", self)
+        animation.setDuration(180)
+        animation.setEasingCurve(QEasingCurve.Type.InOutCubic)
+        animation.setStartValue(start_height)
+        animation.setEndValue(end_height)
+        animation.finished.connect(
+            lambda phase=phase, visible=visible: self.finish_thinking_phase_animation(phase, visible)
+        )
+        phase["animation"] = animation
+        animation.start()
+
+    def finish_thinking_phase_animation(self, phase, visible):
+        widget = phase.get("widget")
+        if widget is None:
+            return
+        phase["animation"] = None
+        if visible:
+            widget.setMaximumHeight(16777215)
+            widget.show()
+        else:
+            widget.hide()
+            widget.setMaximumHeight(0)
+        self.body.setVisible(self.body_layout.count() > 0)
+
+    def ensure_loading_placeholder(self):
+        if self.loading_placeholder is None:
+            self.loading_placeholder = AutoHeightTextBrowser()
+            self.loading_placeholder.document().setDefaultStyleSheet(MARKDOWN_STYLESHEET)
+            self.loading_placeholder.setMaximumHeight(16777215)
+            self.loading_placeholder.setProperty("segmentContent", None)
+            self.loading_placeholder.setProperty("segmentLanguage", None)
+            self.body_layout.addWidget(self.loading_placeholder)
+        return self.loading_placeholder
+
+    def refresh_loading_placeholder(self):
+        if self.has_answer_or_tool_phase():
+            self.loading_active = False
+            if self.loading_timer.isActive():
+                self.loading_timer.stop()
+        show_placeholder = self.loading_active and not self.has_answer_or_tool_phase()
+        if show_placeholder:
+            placeholder = self.ensure_loading_placeholder()
+            segment = {
+                "type": "placeholder",
+                "content": self.loading_placeholder_text(),
+                "language": "",
+            }
+            self.update_segment_widget(placeholder, segment)
+            placeholder.show()
+        elif self.loading_placeholder is not None:
+            self.remove_widget_from_layout(self.body_layout, self.loading_placeholder)
+            self.loading_placeholder.deleteLater()
+            self.loading_placeholder = None
+        self.body.setVisible(self.body_layout.count() > 0)
 
     def render_assistant_content(self, layout, text):
         if layout is None:
@@ -1503,7 +1692,7 @@ class MessageCard(QFrame):
             QTimer.singleShot(0, window.update_sticky_code_header)
 
     def assistant_segments(self, text):
-        normalized_text = replace_terminal_command_tags(text or "...")
+        normalized_text = replace_terminal_command_tags(text or "")
         normalized_text = normalize_terminal_fences(normalized_text)
         segments = []
         for segment_type, content, language in split_markdown_code_segments(normalized_text):
@@ -1511,9 +1700,18 @@ class MessageCard(QFrame):
                 segments.append({"type": "code", "content": content, "language": language})
             elif content.strip():
                 segments.append({"type": "text", "content": render_latexish_text(content), "language": ""})
-        if not segments:
-            segments.append({"type": "text", "content": "...", "language": ""})
         return segments
+
+    def remove_widget_from_layout(self, layout, target):
+        for index in range(layout.count()):
+            item = layout.itemAt(index)
+            if item is not None and item.widget() is target:
+                layout.takeAt(index)
+                return True
+        return False
+
+    def loading_placeholder_text(self):
+        return "." * (self.loading_step + 1)
 
     def can_reuse_segment_widget(self, widget, segment):
         if segment["type"] == "code":
@@ -1522,7 +1720,11 @@ class MessageCard(QFrame):
 
     def create_segment_widget(self, segment):
         if segment["type"] == "code":
-            widget = AssistantCodeBlock(segment["content"], segment["language"])
+            widget = AssistantCodeBlock(
+                segment["content"],
+                segment["language"],
+                content_padding=self.code_sticky_content_padding,
+            )
         else:
             widget = AutoHeightTextBrowser()
             widget.document().setDefaultStyleSheet(MARKDOWN_STYLESHEET)
@@ -1588,23 +1790,35 @@ class MessageCard(QFrame):
         self.attachments_widget.show()
 
     def append_text(self, token):
-        if self.role == "assistant" and self.render_debounce_enabled and self.render_timer is not None:
+        if self.role == "assistant":
             self.raw_text += token
-            self.pending_render_text = self.raw_text
-            if self.render_debounce_interval_ms <= 0:
-                self.flush_pending_render()
-            elif not self.render_timer.isActive():
-                self.render_timer.start()
+            if self.active_stream_phase is None or self.active_stream_phase.get("type") != "content":
+                self.active_stream_phase = self.create_content_phase()
+            self.active_stream_phase["text"] += token
+            if self.render_debounce_enabled and self.render_timer is not None:
+                self.pending_render_text = self.active_stream_phase["text"]
+                if self.render_debounce_interval_ms <= 0:
+                    self.flush_pending_render()
+                elif not self.render_timer.isActive():
+                    self.render_timer.start()
+            else:
+                self.render_content_phase(self.active_stream_phase)
+                self.refresh_loading_placeholder()
+                self.notify_assistant_content_changed()
             return
         self.update_text(self.raw_text + token)
 
     def start_terminal_command(self, command, shell_name):
         if self.role != "assistant" or self.terminal_blocks_layout is None:
             return
-        self.terminal_blocks_widget.show()
+        if self.render_timer is not None and self.render_timer.isActive():
+            self.flush_pending_render()
         block = TerminalCommandBlock(command, shell_name)
-        self.terminal_blocks_layout.addWidget(block)
+        self.terminal_blocks.append(block)
         self.current_terminal_block = block
+        self.active_stream_phase = self.create_terminal_phase(block)
+        self.refresh_loading_placeholder()
+        self.notify_assistant_content_changed()
 
     def append_terminal_log(self, text):
         if self.role != "assistant":
@@ -1619,45 +1833,55 @@ class MessageCard(QFrame):
             return
         self.current_terminal_block.finish(status)
         self.current_terminal_block = None
+        self.active_stream_phase = None
 
     def append_thinking(self, token, visible):
         if self.role != "assistant":
             return
         self.thinking_text += token
-        has_thinking = bool(self.thinking_text.strip())
-        self.thinking_label.setVisible(visible and has_thinking)
-        self.thinking_body.setVisible(visible and has_thinking)
-        if visible and has_thinking:
-            self.thinking_body.setHtml(prepare_assistant_html(self.thinking_text))
-            self.thinking_body.update_height()
+        if self.render_timer is not None and self.render_timer.isActive():
+            self.flush_pending_render()
+        if self.active_stream_phase is None or self.active_stream_phase.get("type") != "thinking":
+            self.active_stream_phase = self.create_thinking_phase()
+        self.active_stream_phase["text"] += token
+        self.render_thinking_phase(self.active_stream_phase, visible)
+        self.refresh_loading_placeholder()
+        self.notify_assistant_content_changed()
 
     def set_thinking_visibility(self, visible):
         if self.role != "assistant":
             return
-        has_thinking = bool(self.thinking_text.strip())
-        self.thinking_label.setVisible(visible and has_thinking)
-        self.thinking_body.setVisible(visible and has_thinking)
+        for phase in self.timeline_phases:
+            if phase.get("type") == "thinking":
+                self.render_thinking_phase(phase, visible)
+        self.refresh_loading_placeholder()
+        self.notify_assistant_content_changed()
 
     def start_loading(self):
         if self.role != "assistant":
             return
         self.loading_step = 0
+        self.loading_active = True
         self.update_loading_text()
         self.loading_timer.start()
 
     def stop_loading(self):
         if self.role != "assistant":
             return
+        if self.loading_active and not self.has_answer_or_tool_phase():
+            return
         self.loading_timer.stop()
+        self.loading_active = False
+        self.refresh_loading_placeholder()
 
     def advance_loading_frame(self):
         self.loading_step = (self.loading_step + 1) % 4
-        if not self.raw_text.strip():
+        if self.loading_active:
             self.update_loading_text()
 
     def update_loading_text(self):
-        dots = "." * (self.loading_step + 1)
-        self.render_assistant_content(self.body_layout, dots)
+        self.refresh_loading_placeholder()
+        self.notify_assistant_content_changed()
 
     def copy_text(self):
         QGuiApplication.clipboard().setText(self.raw_text)

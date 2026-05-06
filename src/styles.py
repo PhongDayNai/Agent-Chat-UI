@@ -1326,3 +1326,10 @@ a:hover {
     text-decoration: underline;
 }
 """
+
+THINKING_MARKDOWN_STYLESHEET = MARKDOWN_STYLESHEET + """
+body, p, li {
+    color: #aeb6c2;
+    font-style: italic;
+}
+"""

@@ -273,6 +273,10 @@ class ChatFlowMixin:
             agent_terminal_permission=self.effective_terminal_permission_for_request(),
             default_permissions=self.default_permissions,
             terminal_cwd=str(self.workspace_path),
+            terminal_output_limit=self.terminal_output_limit,
+            terminal_timeout_seconds=self.terminal_timeout_seconds,
+            max_agent_terminal_steps=self.max_agent_terminal_steps,
+            max_output_tokens=self.max_output_tokens,
         )
         self.worker.token_received.connect(self.on_token_received)
         self.worker.thinking_received.connect(self.on_thinking_received)
@@ -833,10 +837,7 @@ class ChatFlowMixin:
         self.refresh_chat_header()
         if self.current_assistant_card is not None:
             self.current_assistant_card.stop_loading()
-            if not self.current_assistant_card.raw_text:
-                self.current_assistant_card.update_text(token)
-            else:
-                self.current_assistant_card.append_text(token)
+            self.current_assistant_card.append_text(token)
         if should_focus_reply:
             self.scroll_to_assistant_reply()
 
@@ -931,6 +932,7 @@ class ChatFlowMixin:
             attachments=attachments,
             render_debounce_enabled=self.assistant_debounce_enabled,
             render_debounce_interval_ms=self.assistant_debounce_interval_ms,
+            code_sticky_content_padding=self.code_sticky_content_padding,
         )
         card.retry_requested.connect(self.retry_message)
         card.image_preview_requested.connect(self.open_message_image_gallery)
