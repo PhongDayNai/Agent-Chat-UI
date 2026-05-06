@@ -21,6 +21,7 @@ from constants import (
     DEFAULT_SERVER_BASE_URL,
     IS_WINDOWS,
     MAX_AGENT_TERMINAL_STEPS,
+    MAX_OUTPUT_TOKENS,
     TERMINAL_COMMAND_RE,
     TERMINAL_OUTPUT_LIMIT,
     TERMINAL_SHELL_NAME,
@@ -54,6 +55,10 @@ class ChatCompletionWorker(QThread):
         self.agent_terminal_permission = "default"
         self.default_permissions = set()
         self.terminal_cwd = APP_WORKSPACE
+        self.terminal_output_limit = TERMINAL_OUTPUT_LIMIT
+        self.terminal_timeout_seconds = TERMINAL_TIMEOUT_SECONDS
+        self.max_agent_terminal_steps = MAX_AGENT_TERMINAL_STEPS
+        self.max_output_tokens = MAX_OUTPUT_TOKENS
         self.permission_condition = threading.Condition()
         self.pending_permission_decision = None
 
@@ -70,6 +75,10 @@ class ChatCompletionWorker(QThread):
         agent_terminal_permission="default",
         default_permissions=None,
         terminal_cwd=None,
+        terminal_output_limit=TERMINAL_OUTPUT_LIMIT,
+        terminal_timeout_seconds=TERMINAL_TIMEOUT_SECONDS,
+        max_agent_terminal_steps=MAX_AGENT_TERMINAL_STEPS,
+        max_output_tokens=MAX_OUTPUT_TOKENS,
     ):
         self.base_url = base_url
         self.model_name = model_name
@@ -86,6 +95,10 @@ class ChatCompletionWorker(QThread):
             if self.normalize_terminal_command_key(command)
         }
         self.terminal_cwd = terminal_cwd or APP_WORKSPACE
+        self.terminal_output_limit = max(1, int(terminal_output_limit))
+        self.terminal_timeout_seconds = max(1, int(terminal_timeout_seconds))
+        self.max_agent_terminal_steps = int(max_agent_terminal_steps)
+        self.max_output_tokens = max(1, int(max_output_tokens))
 
     def run(self):
         self.stop_requested = False
@@ -98,7 +111,8 @@ class ChatCompletionWorker(QThread):
 
         try:
             messages = list(self.messages)
-            for step in range(MAX_AGENT_TERMINAL_STEPS + 1):
+            step = 0
+            while True:
                 response_text, generation_success, stopped = self.stream_chat_completion(messages)
                 if not generation_success or stopped:
                     success = generation_success
@@ -148,11 +162,17 @@ class ChatCompletionWorker(QThread):
                     }
                 )
 
-                if step == MAX_AGENT_TERMINAL_STEPS:
-                    limit_message = "\n\n_Agent terminal step limit reached._"
+                if self.max_agent_terminal_steps >= 0 and step == self.max_agent_terminal_steps:
+                    limit_message = (
+                        "\n\n_Agent terminal step limit reached. "
+                        "If this task needs more terminal commands, increase Terminal steps in Runtime limits "
+                        "or enable Unlimited steps._"
+                    )
                     self.full_response += limit_message
                     self.token_received.emit(limit_message)
                     success = True
+                    break
+                step += 1
         except requests.exceptions.ConnectionError:
             self.error_occurred.emit(f"OpenAI-compatible server is not reachable at {self.base_url}.")
         except requests.exceptions.Timeout:
@@ -171,7 +191,7 @@ class ChatCompletionWorker(QThread):
             "model": self.model_name,
             "messages": messages,
             "stream": True,
-            "max_tokens": 2048,
+            "max_tokens": self.max_output_tokens,
             "temperature": self.temperature,
             "top_p": self.top_p,
             "top_k": self.top_k,
@@ -330,7 +350,7 @@ class ChatCompletionWorker(QThread):
                 os.set_blocking(process.stderr.fileno(), False)
                 selector.register(process.stderr, selectors.EVENT_READ, "stderr")
 
-            deadline = time.monotonic() + TERMINAL_TIMEOUT_SECONDS
+            deadline = time.monotonic() + self.terminal_timeout_seconds
             while process.poll() is None or selector.get_map():
                 if self.stop_requested:
                     self.terminate_terminal_process(process)
@@ -423,7 +443,7 @@ class ChatCompletionWorker(QThread):
                 reader_threads.append(thread)
 
             output_parts = []
-            deadline = time.monotonic() + TERMINAL_TIMEOUT_SECONDS
+            deadline = time.monotonic() + self.terminal_timeout_seconds
             while process.poll() is None or any(thread.is_alive() for thread in reader_threads):
                 if self.stop_requested:
                     self.terminate_terminal_process(process)
@@ -603,9 +623,9 @@ class ChatCompletionWorker(QThread):
     def truncate_terminal_output(self, output):
         if not output:
             return "(no output)"
-        if len(output) <= TERMINAL_OUTPUT_LIMIT:
+        if len(output) <= self.terminal_output_limit:
             return output
-        return output[:TERMINAL_OUTPUT_LIMIT] + "\n\n[Terminal output truncated]"
+        return output[:self.terminal_output_limit] + "\n\n[Terminal output truncated]"
 
     def render_terminal_result(self, command, result):
         status = self.terminal_status_text(result)

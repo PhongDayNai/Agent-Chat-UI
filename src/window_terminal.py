@@ -286,6 +286,8 @@ class TerminalPermissionMixin:
             allowed = ", ".join(self.default_permissions)
             self.default_permissions_detail.setText(f"Default commands: {allowed}")
             self.default_permissions_detail.setToolTip("")
+        if hasattr(self, "refresh_terminal_limits_visibility"):
+            self.refresh_terminal_limits_visibility()
 
     def is_terminal_enabled_for_request(self):
         if self.active_mode == MODE_AGENT:

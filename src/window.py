@@ -28,8 +28,19 @@ from constants import (
     APP_WORKSPACE,
     ANIM_LOADING_SMALL_PATH,
     ARROW_UP_ICON_PATH,
+    CODE_STICKY_CONTENT_PADDING,
+    CODE_STICKY_HEADER_HEIGHT,
     DEFAULT_SERVER_BASE_URL,
+    MAX_AGENT_TERMINAL_STEPS,
+    MAX_ATTACHMENT_TEXT_CHARS,
+    MAX_OUTPUT_TOKENS,
+    MAX_URL_DOWNLOAD_BYTES,
+    MAX_URLS_PER_MESSAGE,
+    MAX_URL_TEXT_CHARS,
     PENCIL_ICON_PATH,
+    TERMINAL_OUTPUT_LIMIT,
+    TERMINAL_TIMEOUT_SECONDS,
+    URL_FETCH_TIMEOUT,
 )
 from characters import (
     normalize_character_profiles,
@@ -111,6 +122,7 @@ class AgentChatWindow(
         terminal_config = self.config.get("agent_terminal", {})
         character_profiles_config = self.config.get("character_profiles", {})
         rendering_config = self.config.get("assistant_rendering", {})
+        limits_config = self.config.get("limits", {})
         sampling_config = self.config.get("sampling", {})
         ui_config = self.config.get("ui", {})
         workspace_config = self.config.get("workspace", {})
@@ -156,6 +168,39 @@ class AgentChatWindow(
         )
         self.assistant_debounce_interval_ms = self.normalize_debounce_interval(
             rendering_config.get("debounce_interval_ms", DEFAULT_ASSISTANT_DEBOUNCE_INTERVAL_MS)
+        )
+        self.max_attachment_text_chars = int(
+            limits_config.get("max_attachment_text_chars", MAX_ATTACHMENT_TEXT_CHARS)
+        )
+        self.code_sticky_header_height = int(
+            limits_config.get("code_sticky_header_height", CODE_STICKY_HEADER_HEIGHT)
+        )
+        self.code_sticky_content_padding = int(
+            limits_config.get("code_sticky_content_padding", CODE_STICKY_CONTENT_PADDING)
+        )
+        self.max_urls_per_message = int(
+            limits_config.get("max_urls_per_message", MAX_URLS_PER_MESSAGE)
+        )
+        self.max_url_download_bytes = int(
+            limits_config.get("max_url_download_bytes", MAX_URL_DOWNLOAD_BYTES)
+        )
+        self.max_url_text_chars = int(
+            limits_config.get("max_url_text_chars", MAX_URL_TEXT_CHARS)
+        )
+        self.max_output_tokens = int(
+            limits_config.get("max_output_tokens", MAX_OUTPUT_TOKENS)
+        )
+        self.terminal_output_limit = int(
+            limits_config.get("terminal_output_limit", TERMINAL_OUTPUT_LIMIT)
+        )
+        self.url_fetch_timeout = int(
+            limits_config.get("url_fetch_timeout", URL_FETCH_TIMEOUT)
+        )
+        self.terminal_timeout_seconds = int(
+            limits_config.get("terminal_timeout_seconds", TERMINAL_TIMEOUT_SECONDS)
+        )
+        self.max_agent_terminal_steps = int(
+            limits_config.get("max_agent_terminal_steps", MAX_AGENT_TERMINAL_STEPS)
         )
         self.show_thinking = bool(ui_config.get("show_thinking", False))
         self.pin_panel = bool(ui_config.get("pin_panel", False))
@@ -348,7 +393,10 @@ class AgentChatWindow(
         self.chat_layout.addStretch()
 
         self.scroll_area.setWidget(self.chat_surface)
-        self.sticky_code_header = StickyCodeHeader(self.scroll_area.viewport())
+        self.sticky_code_header = StickyCodeHeader(
+            self.scroll_area.viewport(),
+            header_height=self.code_sticky_header_height,
+        )
         self.build_character_overlay()
 
         self.composer_frame = self.build_composer()
@@ -1115,6 +1163,143 @@ class AgentChatWindow(
         rendering_section_layout.addLayout(debounce_row)
         self.assistant_rendering_section.setVisible(self.assistant_rendering_enabled)
         composer_body_layout.addWidget(self.assistant_rendering_section)
+
+        self.limits_section = QWidget()
+        limits_section_layout = QVBoxLayout(self.limits_section)
+        limits_section_layout.setContentsMargins(0, 0, 0, 0)
+        limits_section_layout.setSpacing(8)
+
+        limits_heading = QLabel("Runtime limits")
+        limits_heading.setObjectName("sectionLabel")
+        limits_section_layout.addWidget(limits_heading)
+
+        limits_layout = QFormLayout()
+        limits_layout.setContentsMargins(0, 0, 0, 0)
+        limits_layout.setHorizontalSpacing(14)
+        limits_layout.setVerticalSpacing(8)
+        limits_layout.setLabelAlignment(Qt.AlignmentFlag.AlignLeft)
+        limits_layout.setFormAlignment(Qt.AlignmentFlag.AlignTop)
+        limits_layout.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.FieldsStayAtSizeHint)
+        self.limits_layout = limits_layout
+
+        self.max_attachment_text_chars_spin = self.build_limit_spin(
+            1000,
+            200000,
+            self.max_attachment_text_chars,
+            " chars",
+        )
+        limits_layout.addRow("Attachment text", self.max_attachment_text_chars_spin)
+
+        self.code_sticky_header_height_spin = self.build_limit_spin(
+            28,
+            120,
+            self.code_sticky_header_height,
+            " px",
+        )
+        limits_layout.addRow("Code header height", self.code_sticky_header_height_spin)
+
+        self.code_sticky_content_padding_spin = self.build_limit_spin(
+            0,
+            64,
+            self.code_sticky_content_padding,
+            " px",
+        )
+        limits_layout.addRow("Code top padding", self.code_sticky_content_padding_spin)
+
+        self.max_urls_per_message_spin = self.build_limit_spin(
+            0,
+            50,
+            self.max_urls_per_message,
+            " urls",
+        )
+        limits_layout.addRow("URLs per message", self.max_urls_per_message_spin)
+
+        self.max_url_download_bytes_spin = self.build_limit_spin(
+            1024,
+            100 * 1024 * 1024,
+            self.max_url_download_bytes,
+            " bytes",
+        )
+        limits_layout.addRow("URL download", self.max_url_download_bytes_spin)
+
+        self.max_url_text_chars_spin = self.build_limit_spin(
+            1000,
+            500000,
+            self.max_url_text_chars,
+            " chars",
+        )
+        limits_layout.addRow("URL text", self.max_url_text_chars_spin)
+
+        self.max_output_tokens_spin = self.build_limit_spin(
+            1,
+            200000,
+            self.max_output_tokens,
+            " tokens",
+        )
+        limits_layout.addRow("Max output", self.max_output_tokens_spin)
+
+        self.terminal_output_limit_spin = self.build_limit_spin(
+            1000,
+            500000,
+            self.terminal_output_limit,
+            " chars",
+        )
+        limits_layout.addRow("Terminal output", self.terminal_output_limit_spin)
+
+        self.url_fetch_timeout_spin = self.build_limit_spin(
+            1,
+            300,
+            self.url_fetch_timeout,
+            " sec",
+        )
+        limits_layout.addRow("URL fetch timeout", self.url_fetch_timeout_spin)
+
+        self.terminal_timeout_seconds_spin = self.build_limit_spin(
+            1,
+            3600,
+            self.terminal_timeout_seconds,
+            " sec",
+        )
+        limits_layout.addRow("Terminal timeout", self.terminal_timeout_seconds_spin)
+
+        self.last_limited_terminal_steps = (
+            MAX_AGENT_TERMINAL_STEPS
+            if self.max_agent_terminal_steps < 0
+            else self.max_agent_terminal_steps
+        )
+        self.max_agent_terminal_steps_spin = self.build_limit_spin(
+            -1,
+            100,
+            -1 if self.max_agent_terminal_steps < 0 else self.max_agent_terminal_steps,
+            " steps",
+        )
+        self.max_agent_terminal_steps_spin.setSpecialValueText("Unlimited")
+        limits_layout.addRow("Terminal steps", self.max_agent_terminal_steps_spin)
+        self.max_agent_terminal_steps_unlimited_checkbox = SwitchPill(self.max_agent_terminal_steps < 0)
+        self.max_agent_terminal_steps_unlimited_checkbox.setChecked(self.max_agent_terminal_steps < 0)
+        self.max_agent_terminal_steps_unlimited_checkbox.toggled.connect(self.set_terminal_steps_unlimited)
+        self.max_agent_terminal_steps_unlimited_row = QWidget()
+        unlimited_row = QHBoxLayout(self.max_agent_terminal_steps_unlimited_row)
+        unlimited_row.setContentsMargins(0, 0, 0, 0)
+        unlimited_row.setSpacing(10)
+        unlimited_row.addWidget(QLabel("Unlimited steps"), 1, Qt.AlignmentFlag.AlignVCenter)
+        unlimited_row.addWidget(
+            self.max_agent_terminal_steps_unlimited_checkbox,
+            0,
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+        )
+        limits_layout.addRow("", self.max_agent_terminal_steps_unlimited_row)
+        self.refresh_terminal_steps_limit_ui()
+        self.terminal_limit_fields = (
+            self.terminal_output_limit_spin,
+            self.terminal_timeout_seconds_spin,
+            self.max_agent_terminal_steps_spin,
+            self.max_agent_terminal_steps_unlimited_row,
+        )
+        self.refresh_terminal_limits_visibility()
+        limits_section_layout.addLayout(limits_layout)
+        composer_body_layout.addWidget(self.limits_section)
+
         composer_section_layout.addWidget(self.composer_body)
         self.set_composer_panel_expanded(self.composer_expanded, animate=False, persist=False)
         layout.addWidget(self.composer_section)
@@ -1421,6 +1606,86 @@ class AgentChatWindow(
         self.save_config()
         self.refresh_rendering_ui()
 
+    def build_limit_spin(self, minimum, maximum, value, suffix=""):
+        spin = NoWheelSpinBox()
+        spin.setRange(int(minimum), int(maximum))
+        spin.setValue(int(value))
+        if suffix:
+            spin.setSuffix(suffix)
+        spin.setFixedWidth(156)
+        spin.valueChanged.connect(lambda _value: self.update_runtime_limits())
+        return spin
+
+    def update_runtime_limits(self):
+        mapping = {
+            "max_attachment_text_chars": "max_attachment_text_chars_spin",
+            "code_sticky_header_height": "code_sticky_header_height_spin",
+            "code_sticky_content_padding": "code_sticky_content_padding_spin",
+            "max_urls_per_message": "max_urls_per_message_spin",
+            "max_url_download_bytes": "max_url_download_bytes_spin",
+            "max_url_text_chars": "max_url_text_chars_spin",
+            "max_output_tokens": "max_output_tokens_spin",
+            "terminal_output_limit": "terminal_output_limit_spin",
+            "url_fetch_timeout": "url_fetch_timeout_spin",
+            "terminal_timeout_seconds": "terminal_timeout_seconds_spin",
+        }
+        for attribute, widget_name in mapping.items():
+            widget = getattr(self, widget_name, None)
+            if widget is not None:
+                setattr(self, attribute, int(widget.value()))
+        if getattr(self, "max_agent_terminal_steps_unlimited_checkbox", None) is not None:
+            if self.max_agent_terminal_steps_unlimited_checkbox.isChecked():
+                self.max_agent_terminal_steps = -1
+            else:
+                self.max_agent_terminal_steps = max(0, int(self.max_agent_terminal_steps_spin.value()))
+                self.last_limited_terminal_steps = self.max_agent_terminal_steps
+        if self.sticky_code_header is not None:
+            self.sticky_code_header.set_header_height(self.code_sticky_header_height)
+            self.update_sticky_code_header()
+        self.save_config()
+
+    def set_terminal_steps_unlimited(self, enabled):
+        self.refresh_terminal_steps_limit_ui()
+        self.update_runtime_limits()
+
+    def refresh_terminal_steps_limit_ui(self):
+        unlimited = (
+            getattr(self, "max_agent_terminal_steps_unlimited_checkbox", None) is not None
+            and self.max_agent_terminal_steps_unlimited_checkbox.isChecked()
+        )
+        if hasattr(self, "max_agent_terminal_steps_spin"):
+            self.max_agent_terminal_steps_spin.blockSignals(True)
+            if unlimited:
+                current_value = int(self.max_agent_terminal_steps_spin.value())
+                if current_value >= 0:
+                    self.last_limited_terminal_steps = current_value
+                self.max_agent_terminal_steps_spin.setValue(-1)
+            elif int(self.max_agent_terminal_steps_spin.value()) < 0:
+                self.max_agent_terminal_steps_spin.setValue(
+                    max(0, int(getattr(self, "last_limited_terminal_steps", MAX_AGENT_TERMINAL_STEPS)))
+                )
+            self.max_agent_terminal_steps_spin.blockSignals(False)
+            self.max_agent_terminal_steps_spin.setEnabled(not unlimited)
+
+    def refresh_terminal_limits_visibility(self):
+        if not hasattr(self, "limits_layout"):
+            return
+        visible = self.is_terminal_enabled_for_request()
+        for field in getattr(self, "terminal_limit_fields", ()):
+            self.set_form_row_visible(self.limits_layout, field, visible)
+
+    def set_form_row_visible(self, form_layout, field, visible):
+        try:
+            form_layout.setRowVisible(field, visible)
+            return
+        except (AttributeError, TypeError):
+            pass
+        label = form_layout.labelForField(field)
+        if label is not None:
+            label.setVisible(visible)
+        if isinstance(field, QWidget):
+            field.setVisible(visible)
+
     def set_composer_max_lines(self, value):
         self.composer_max_lines = self.normalize_composer_max_lines(value)
         if hasattr(self, "composer_max_lines_spin"):
@@ -1510,6 +1775,7 @@ class AgentChatWindow(
         if hasattr(self, "character_capabilities_section"):
             self.set_sidebar_section_visible(self.character_capabilities_section, is_character)
         self.refresh_tool_sections_visibility(is_agent, effective_terminal_enabled)
+        self.refresh_terminal_limits_visibility()
         if hasattr(self, "composer"):
             self.composer.setPlaceholderText(self.composer_placeholder())
         self.refresh_chat_header()

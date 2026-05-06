@@ -74,6 +74,7 @@ MAX_URLS_PER_MESSAGE = 4
 MAX_URL_DOWNLOAD_BYTES = 8 * 1024 * 1024
 MAX_URL_TEXT_CHARS = 16000
 URL_FETCH_TIMEOUT = 12
+MAX_OUTPUT_TOKENS = 2048
 URL_RE = re.compile(r"https?://[^\s<>\]\)\"']+", re.IGNORECASE)
 TRAILING_URL_PUNCTUATION = ".,;:!?)]}\"'"
 TERMINAL_COMMAND_RE = re.compile(
@@ -99,6 +100,9 @@ command here
 Rules:
 - If the user explicitly asks you to run, execute, check, inspect with, or show the output of a terminal command, request that command with a terminal_command tag instead of saying you cannot run commands.
 - Run commands only when they are useful for the user's request.
+- Terminal commands are executed only when the terminal_command tag appears in the assistant message content.
+- Terminal commands mentioned only in reasoning or thinking are ignored and will not be executed.
+- If you need a command to run, place exactly one terminal_command tag in the assistant message content, not only in reasoning or thinking.
 - The command runs with {TERMINAL_SHELL_DESCRIPTION} in this workspace: {workspace_path}
 - After terminal output is returned, continue from the result.
 - Do not invent terminal output.

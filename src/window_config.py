@@ -24,9 +24,13 @@ except ImportError:
 from constants import (
     APP_WORKSPACE, ARROW_DOWN_ICON_PATH, CONFIG_PATH, DEFAULT_PERMISSIONS_ICON_PATH,
     DEFAULT_SERVER_BASE_URL, FULL_ACCESS_ICON_PATH, LEGACY_CONFIG_PATH,
-    MAX_ATTACHMENT_TEXT_CHARS, MAX_URL_DOWNLOAD_BYTES, MAX_URLS_PER_MESSAGE,
+    CODE_STICKY_CONTENT_PADDING, CODE_STICKY_HEADER_HEIGHT,
+    MAX_AGENT_TERMINAL_STEPS, MAX_ATTACHMENT_TEXT_CHARS,
+    MAX_OUTPUT_TOKENS,
+    MAX_URL_DOWNLOAD_BYTES, MAX_URLS_PER_MESSAGE,
     MAX_URL_TEXT_CHARS, TEXT_PREVIEW_SUFFIXES, TRAILING_URL_PUNCTUATION,
-    URL_FETCH_TIMEOUT, URL_RE, agent_terminal_prompt,
+    TERMINAL_OUTPUT_LIMIT, TERMINAL_TIMEOUT_SECONDS, URL_FETCH_TIMEOUT,
+    URL_RE, agent_terminal_prompt,
 )
 from html_utils import HtmlTextExtractor
 from markdown_utils import normalize_terminal_fences, replace_terminal_command_tags
@@ -94,6 +98,19 @@ class ConfigMixin:
                 "enabled": True,
                 "debounce_enabled": DEFAULT_ASSISTANT_DEBOUNCE_ENABLED,
                 "debounce_interval_ms": DEFAULT_ASSISTANT_DEBOUNCE_INTERVAL_MS,
+            },
+            "limits": {
+                "max_attachment_text_chars": MAX_ATTACHMENT_TEXT_CHARS,
+                "code_sticky_header_height": CODE_STICKY_HEADER_HEIGHT,
+                "code_sticky_content_padding": CODE_STICKY_CONTENT_PADDING,
+                "max_urls_per_message": MAX_URLS_PER_MESSAGE,
+                "max_url_download_bytes": MAX_URL_DOWNLOAD_BYTES,
+                "max_url_text_chars": MAX_URL_TEXT_CHARS,
+                "max_output_tokens": MAX_OUTPUT_TOKENS,
+                "terminal_output_limit": TERMINAL_OUTPUT_LIMIT,
+                "url_fetch_timeout": URL_FETCH_TIMEOUT,
+                "terminal_timeout_seconds": TERMINAL_TIMEOUT_SECONDS,
+                "max_agent_terminal_steps": MAX_AGENT_TERMINAL_STEPS,
             },
             "ui": {
                 "enabled": True,
@@ -166,6 +183,53 @@ class ConfigMixin:
                     else self.assistant_debounce_interval_ms
                 ),
             },
+            "limits": {
+                "max_attachment_text_chars": self.limit_spin_value(
+                    "max_attachment_text_chars_spin",
+                    self.max_attachment_text_chars,
+                ),
+                "code_sticky_header_height": self.limit_spin_value(
+                    "code_sticky_header_height_spin",
+                    self.code_sticky_header_height,
+                ),
+                "code_sticky_content_padding": self.limit_spin_value(
+                    "code_sticky_content_padding_spin",
+                    self.code_sticky_content_padding,
+                ),
+                "max_urls_per_message": self.limit_spin_value(
+                    "max_urls_per_message_spin",
+                    self.max_urls_per_message,
+                ),
+                "max_url_download_bytes": self.limit_spin_value(
+                    "max_url_download_bytes_spin",
+                    self.max_url_download_bytes,
+                ),
+                "max_url_text_chars": self.limit_spin_value(
+                    "max_url_text_chars_spin",
+                    self.max_url_text_chars,
+                ),
+                "max_output_tokens": self.limit_spin_value(
+                    "max_output_tokens_spin",
+                    self.max_output_tokens,
+                ),
+                "terminal_output_limit": self.limit_spin_value(
+                    "terminal_output_limit_spin",
+                    self.terminal_output_limit,
+                ),
+                "url_fetch_timeout": self.limit_spin_value(
+                    "url_fetch_timeout_spin",
+                    self.url_fetch_timeout,
+                ),
+                "terminal_timeout_seconds": self.limit_spin_value(
+                    "terminal_timeout_seconds_spin",
+                    self.terminal_timeout_seconds,
+                ),
+                "max_agent_terminal_steps": self.limit_spin_value(
+                    "max_agent_terminal_steps_spin",
+                    self.max_agent_terminal_steps,
+                    unlimited_attribute="max_agent_terminal_steps_unlimited_checkbox",
+                ),
+            },
             "ui": {
                 "enabled": True,
                 "show_thinking": (
@@ -206,6 +270,7 @@ class ConfigMixin:
             if isinstance(payload.get("assistant_rendering"), dict)
             else {}
         )
+        limits_payload = payload.get("limits") if isinstance(payload.get("limits"), dict) else {}
         ui_payload = payload.get("ui") if isinstance(payload.get("ui"), dict) else {}
         mode = normalize_mode(payload.get("active_mode", default_config.get("active_mode", MODE_CHAT)))
         if mode != payload.get("active_mode", default_config.get("active_mode", MODE_CHAT)):
@@ -213,6 +278,8 @@ class ConfigMixin:
         if "active_mode" not in payload:
             self.config_needs_save = True
         if "character_profiles" not in payload:
+            self.config_needs_save = True
+        if "limits" not in payload:
             self.config_needs_save = True
 
         return {
@@ -261,6 +328,7 @@ class ConfigMixin:
                 **default_config["assistant_rendering"],
                 **rendering_payload,
             },
+            "limits": self.normalize_limits_config(limits_payload, default_config["limits"]),
             "ui": {
                 **default_config["ui"],
                 **ui_payload,
@@ -302,6 +370,95 @@ class ConfigMixin:
                     )
                 ),
             },
+        }
+
+    def limit_spin_value(self, attribute, fallback, unlimited_attribute=None):
+        if unlimited_attribute is not None:
+            unlimited_widget = getattr(self, unlimited_attribute, None)
+            if unlimited_widget is not None and unlimited_widget.isChecked():
+                return -1
+        widget = getattr(self, attribute, None)
+        return int(widget.value()) if widget is not None else int(fallback)
+
+    def normalize_limit_int(self, value, default, minimum, maximum):
+        try:
+            normalized = int(value)
+        except (TypeError, ValueError):
+            self.config_needs_save = True
+            return int(default)
+        if normalized < minimum or normalized > maximum:
+            self.config_needs_save = True
+            return max(minimum, min(maximum, normalized))
+        return normalized
+
+    def normalize_limits_config(self, payload, defaults):
+        return {
+            "max_attachment_text_chars": self.normalize_limit_int(
+                payload.get("max_attachment_text_chars", defaults["max_attachment_text_chars"]),
+                defaults["max_attachment_text_chars"],
+                1000,
+                200000,
+            ),
+            "code_sticky_header_height": self.normalize_limit_int(
+                payload.get("code_sticky_header_height", defaults["code_sticky_header_height"]),
+                defaults["code_sticky_header_height"],
+                28,
+                120,
+            ),
+            "code_sticky_content_padding": self.normalize_limit_int(
+                payload.get("code_sticky_content_padding", defaults["code_sticky_content_padding"]),
+                defaults["code_sticky_content_padding"],
+                0,
+                64,
+            ),
+            "max_urls_per_message": self.normalize_limit_int(
+                payload.get("max_urls_per_message", defaults["max_urls_per_message"]),
+                defaults["max_urls_per_message"],
+                0,
+                50,
+            ),
+            "max_url_download_bytes": self.normalize_limit_int(
+                payload.get("max_url_download_bytes", defaults["max_url_download_bytes"]),
+                defaults["max_url_download_bytes"],
+                1024,
+                100 * 1024 * 1024,
+            ),
+            "max_url_text_chars": self.normalize_limit_int(
+                payload.get("max_url_text_chars", defaults["max_url_text_chars"]),
+                defaults["max_url_text_chars"],
+                1000,
+                500000,
+            ),
+            "max_output_tokens": self.normalize_limit_int(
+                payload.get("max_output_tokens", defaults["max_output_tokens"]),
+                defaults["max_output_tokens"],
+                1,
+                200000,
+            ),
+            "terminal_output_limit": self.normalize_limit_int(
+                payload.get("terminal_output_limit", defaults["terminal_output_limit"]),
+                defaults["terminal_output_limit"],
+                1000,
+                500000,
+            ),
+            "url_fetch_timeout": self.normalize_limit_int(
+                payload.get("url_fetch_timeout", defaults["url_fetch_timeout"]),
+                defaults["url_fetch_timeout"],
+                1,
+                300,
+            ),
+            "terminal_timeout_seconds": self.normalize_limit_int(
+                payload.get("terminal_timeout_seconds", defaults["terminal_timeout_seconds"]),
+                defaults["terminal_timeout_seconds"],
+                1,
+                3600,
+            ),
+            "max_agent_terminal_steps": self.normalize_limit_int(
+                payload.get("max_agent_terminal_steps", defaults["max_agent_terminal_steps"]),
+                defaults["max_agent_terminal_steps"],
+                -1,
+                100,
+            ),
         }
 
     def normalize_character_card_ratio(self, value):

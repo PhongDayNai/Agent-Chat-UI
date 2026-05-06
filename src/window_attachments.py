@@ -210,7 +210,7 @@ class AttachmentUrlMixin:
             text = text.strip()
             if text:
                 parts.append(f"[Page {page_number}]\n{text}")
-            if sum(len(part) for part in parts) >= MAX_ATTACHMENT_TEXT_CHARS:
+            if sum(len(part) for part in parts) >= self.max_attachment_text_chars:
                 break
         if not parts:
             return "No extractable text was found in this PDF."
@@ -230,11 +230,13 @@ class AttachmentUrlMixin:
             return f"Unable to read file content: {exc}"
 
         content = content.strip()
-        if len(content) > MAX_ATTACHMENT_TEXT_CHARS:
-            content = content[:MAX_ATTACHMENT_TEXT_CHARS] + "\n\n[Truncated]"
+        if len(content) > self.max_attachment_text_chars:
+            content = content[:self.max_attachment_text_chars] + "\n\n[Truncated]"
         return content
 
     def detect_urls(self, text):
+        if self.max_urls_per_message <= 0:
+            return []
         urls = []
         seen = set()
         for match in URL_RE.finditer(text):
@@ -243,14 +245,14 @@ class AttachmentUrlMixin:
                 continue
             seen.add(url)
             urls.append(url)
-            if len(urls) >= MAX_URLS_PER_MESSAGE:
+            if len(urls) >= self.max_urls_per_message:
                 break
         return urls
 
     def fetch_url_bytes(self, url):
         with requests.get(
             url,
-            timeout=URL_FETCH_TIMEOUT,
+            timeout=self.url_fetch_timeout,
             stream=True,
             headers={"User-Agent": "agent-chat-ui/1.0"},
         ) as response:
@@ -262,7 +264,7 @@ class AttachmentUrlMixin:
                 if not chunk:
                     continue
                 total += len(chunk)
-                if total > MAX_URL_DOWNLOAD_BYTES:
+                if total > self.max_url_download_bytes:
                     raise ValueError("download exceeded the size limit")
                 chunks.append(chunk)
             return b"".join(chunks), content_type, response.encoding
@@ -286,7 +288,7 @@ class AttachmentUrlMixin:
             text = (page.extract_text() or "").strip()
             if text:
                 parts.append(f"[Page {page_number}]\n{text}")
-            if sum(len(part) for part in parts) >= MAX_URL_TEXT_CHARS:
+            if sum(len(part) for part in parts) >= self.max_url_text_chars:
                 break
         if not parts:
             return "No extractable text was found in this PDF."
@@ -324,8 +326,8 @@ class AttachmentUrlMixin:
                 media_label = content_type or "Text"
 
         text = text.strip()
-        if len(text) > MAX_URL_TEXT_CHARS:
-            text = text[:MAX_URL_TEXT_CHARS] + "\n\n[Truncated]"
+        if len(text) > self.max_url_text_chars:
+            text = text[:self.max_url_text_chars] + "\n\n[Truncated]"
         if not text:
             text = "No readable text was found."
         return {
