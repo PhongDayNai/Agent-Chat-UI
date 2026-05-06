@@ -86,6 +86,16 @@ TERMINAL_TIMEOUT_SECONDS = 60
 MAX_AGENT_TERMINAL_STEPS = 6
 TERMINAL_SHELL_NAME = "PowerShell" if IS_WINDOWS else "Bash"
 TERMINAL_SHELL_DESCRIPTION = "PowerShell" if IS_WINDOWS else "bash"
+FINAL_ANSWER_MARKER = "[[final_answer]]"
+FINAL_ANSWER_PROTOCOL_PROMPT = f"""
+Agent/tool workflow UI protocol:
+- Use normal assistant content for brief progress notes and tool requests while working.
+- When all reasoning and tool work is complete and you are starting the final user-facing answer, write this split marker on its own line immediately before the final answer:
+{FINAL_ANSWER_MARKER}
+- This is a one-way split marker, not an XML/HTML tag. Do not write a closing marker.
+- Do not write this marker before terminal commands, tool calls, MCP calls, progress notes, or partial answers.
+- The app hides the marker and collapses earlier reasoning/tool phases so the final answer is focused.
+""".strip()
 
 
 def agent_terminal_prompt(workspace_path):
@@ -106,7 +116,7 @@ Rules:
 - The command runs with {TERMINAL_SHELL_DESCRIPTION} in this workspace: {workspace_path}
 - After terminal output is returned, continue from the result.
 - Do not invent terminal output.
-- When the task is complete, answer normally without a terminal_command tag.
+- When the task is complete, start the final answer with {FINAL_ANSWER_MARKER} and do not include a terminal_command tag.
 """.strip()
 
 

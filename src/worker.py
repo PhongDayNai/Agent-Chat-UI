@@ -19,6 +19,7 @@ from PyQt6.QtCore import QThread, pyqtSignal
 from constants import (
     APP_WORKSPACE,
     DEFAULT_SERVER_BASE_URL,
+    FINAL_ANSWER_MARKER,
     IS_WINDOWS,
     MAX_AGENT_TERMINAL_STEPS,
     MAX_OUTPUT_TOKENS,
@@ -35,6 +36,9 @@ class ChatCompletionWorker(QThread):
     terminal_log_received = pyqtSignal(str)
     terminal_command_finished = pyqtSignal(str)
     terminal_permission_requested = pyqtSignal(str, str)
+    final_answer_started = pyqtSignal()
+    final_answer_cancelled = pyqtSignal()
+    final_answer_confirmed = pyqtSignal()
     generation_started = pyqtSignal()
     generation_finished = pyqtSignal(bool, bool, str, str)
     error_occurred = pyqtSignal(str)
@@ -104,6 +108,7 @@ class ChatCompletionWorker(QThread):
         self.stop_requested = False
         self.full_response = ""
         self.full_thinking = ""
+        self.final_answer_announced = False
         self.generation_started.emit()
 
         success = False
@@ -120,8 +125,14 @@ class ChatCompletionWorker(QThread):
 
                 command = self.extract_terminal_command(response_text)
                 if not self.agent_terminal_enabled or not command:
+                    if self.final_answer_announced:
+                        self.final_answer_confirmed.emit()
                     success = True
                     break
+
+                if self.final_answer_announced:
+                    self.final_answer_cancelled.emit()
+                    self.final_answer_announced = False
 
                 approval = self.terminal_command_approval(command)
                 if approval == "reject":
@@ -135,7 +146,8 @@ class ChatCompletionWorker(QThread):
                             "content": (
                                 "The requested terminal command was dismissed by the user and was not run:\n\n"
                                 f"```terminal\n$ {command}\n[dismissed]\n```\n\n"
-                                "Continue without running that command. If you can answer from existing context, do so."
+                                "Continue without running that command. If you can answer from existing context, "
+                                f"start the final answer with {FINAL_ANSWER_MARKER}."
                             ),
                         }
                     )
@@ -157,7 +169,8 @@ class ChatCompletionWorker(QThread):
                             "Terminal output for the command you requested:\n\n"
                             f"{rendered_result}\n\n"
                             "Continue. If you need another command, use one terminal_command tag. "
-                            "If you are done, answer normally without a terminal_command tag."
+                            f"If you are done, start the final answer with {FINAL_ANSWER_MARKER} "
+                            "and do not include a terminal_command tag."
                         ),
                     }
                 )
@@ -197,6 +210,64 @@ class ChatCompletionWorker(QThread):
             "top_k": self.top_k,
         }
         response_text = ""
+        pending_content = ""
+        final_marker_seen = False
+        start_markers = (FINAL_ANSWER_MARKER, "<final_answer>")
+        hidden_markers = (*start_markers, "</final_answer>")
+        start_markers_lower = tuple(marker.lower() for marker in start_markers)
+        hidden_markers_lower = tuple(marker.lower() for marker in hidden_markers)
+        hold_chars = max(len(marker) for marker in hidden_markers) - 1
+
+        def emit_content(content):
+            nonlocal response_text
+            if not content:
+                return
+            response_text += content
+            self.full_response += content
+            self.token_received.emit(content)
+
+        def announce_final_answer():
+            if self.final_answer_announced:
+                return
+            self.final_answer_announced = True
+            self.final_answer_started.emit()
+
+        def handle_content_token(content):
+            nonlocal pending_content, final_marker_seen
+            if not content:
+                return
+
+            pending_content += content
+            while True:
+                lower_pending = pending_content.lower()
+                markers = hidden_markers_lower if final_marker_seen else start_markers_lower
+                matches = [
+                    (lower_pending.find(marker), index)
+                    for index, marker in enumerate(markers)
+                    if lower_pending.find(marker) >= 0
+                ]
+                if not matches:
+                    break
+                marker_index, marker_list_index = min(matches, key=lambda item: item[0])
+                marker = (hidden_markers if final_marker_seen else start_markers)[marker_list_index]
+                before = pending_content[:marker_index]
+                after = pending_content[marker_index + len(marker):]
+                emit_content(before)
+                pending_content = after.lstrip("\r\n") if not final_marker_seen else after
+                if not final_marker_seen:
+                    final_marker_seen = True
+                    announce_final_answer()
+
+            if len(pending_content) > hold_chars:
+                emit_content(pending_content[:-hold_chars])
+                pending_content = pending_content[-hold_chars:]
+
+        def flush_pending_content():
+            nonlocal pending_content
+            if pending_content:
+                emit_content(pending_content)
+                pending_content = ""
+
         chat_url = f"{self.base_url}/v1/chat/completions"
         headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else None
         with requests.post(chat_url, json=payload, headers=headers, stream=True, timeout=120) as response:
@@ -207,6 +278,7 @@ class ChatCompletionWorker(QThread):
 
             for line in response.iter_lines():
                 if self.stop_requested:
+                    flush_pending_content()
                     return response_text, False, True
                 if not line:
                     continue
@@ -216,6 +288,7 @@ class ChatCompletionWorker(QThread):
                     continue
                 line = line[6:]
                 if line == "[DONE]":
+                    flush_pending_content()
                     return response_text, True, False
                 try:
                     data = json.loads(line)
@@ -229,9 +302,10 @@ class ChatCompletionWorker(QThread):
                     self.thinking_received.emit(thinking)
                 token = delta.get("content", "")
                 if token:
-                    response_text += token
-                    self.full_response += token
-                    self.token_received.emit(token)
+                    handle_content_token(token)
+            flush_pending_content()
+            return response_text, False, False
+        flush_pending_content()
         return response_text, False, False
 
     def extract_terminal_command(self, text):

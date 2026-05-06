@@ -1,6 +1,7 @@
 """Build OpenAI-compatible chat messages for the active app mode."""
 
 from characters import get_active_character, get_effective_character_capabilities
+from constants import FINAL_ANSWER_PROTOCOL_PROMPT
 from modes import MODE_AGENT, MODE_CHARACTER
 
 DEFAULT_RESPONSE_STYLE_INSTRUCTION = (
@@ -35,8 +36,14 @@ def build_messages(config, history, user_message, terminal_instruction=None, mcp
             sections.append(mcp_instruction)
 
     else:
+        if mode == MODE_AGENT:
+            sections.append(FINAL_ANSWER_PROTOCOL_PROMPT)
+
         if mode == MODE_AGENT and terminal_instruction:
             sections.append(terminal_instruction)
+
+        if mode == MODE_AGENT and mcp_instruction:
+            sections.append(mcp_instruction)
 
         session_prompt = config.get("session_prompt", {})
         value = str(session_prompt.get("value", "")).strip()
