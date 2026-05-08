@@ -1,4 +1,4 @@
-"""Custom Character Mode widgets for Agent Chat UI v2.0."""
+"""Custom Character Mode widgets for Agent Chat UI v2.1."""
 
 from __future__ import annotations
 

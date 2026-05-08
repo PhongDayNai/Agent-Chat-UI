@@ -1,4 +1,4 @@
-"""Character profile normalization and local-state helpers for Agent Chat UI v2.0."""
+"""Character profile normalization and local-state helpers for Agent Chat UI v2.1."""
 
 DEFAULT_CHARACTER_CAPABILITIES = {
     "file_context": True,
