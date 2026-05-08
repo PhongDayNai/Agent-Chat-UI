@@ -429,24 +429,24 @@ class ThinkingPhaseHeader(QWidget):
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(8)
+        layout.setSpacing(4)
 
         self.title_label = ThinkingTitleLabel()
         self.title_label.setCursor(Qt.CursorShape.PointingHandCursor)
         self.title_label.installEventFilter(self)
         layout.addWidget(self.title_label, 0, Qt.AlignmentFlag.AlignVCenter)
 
-        self.arrow_button = RotatingSvgButton(ARROW_RIGHT_ICON_PATH)
-        self.arrow_button.setObjectName("thinkingArrowButton")
-        self.arrow_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.arrow_button.clicked.connect(self.toggled.emit)
-        layout.addWidget(self.arrow_button, 0, Qt.AlignmentFlag.AlignVCenter)
-
         self.timer_label = QLabel("0s")
         self.timer_label.setObjectName("thinkingTimerLabel")
         self.timer_label.setCursor(Qt.CursorShape.PointingHandCursor)
         self.timer_label.installEventFilter(self)
         layout.addWidget(self.timer_label, 0, Qt.AlignmentFlag.AlignVCenter)
+
+        self.arrow_button = RotatingSvgButton(ARROW_RIGHT_ICON_PATH)
+        self.arrow_button.setObjectName("thinkingArrowButton")
+        self.arrow_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.arrow_button.clicked.connect(self.toggled.emit)
+        layout.addWidget(self.arrow_button, 0, Qt.AlignmentFlag.AlignVCenter)
         layout.addStretch()
 
     def set_title(self, title):
@@ -488,7 +488,7 @@ class ThinkingPhaseHeader(QWidget):
         QTimer.singleShot(0, self.update_title_width)
 
     def update_title_width(self):
-        reserved = self.arrow_button.width() + self.timer_label.sizeHint().width() + 28
+        reserved = self.timer_label.sizeHint().width() + self.arrow_button.width() + 28
         available = max(120, self.width() - reserved)
         title_width = min(available, self.title_label.preferred_width_for(available))
         self.title_label.setFixedWidth(max(24, title_width))
@@ -1607,6 +1607,7 @@ class MessageCard(QFrame):
         self.final_answer_pending = False
         self.final_answer_phase = None
         self.work_summary_phase = None
+        self.work_progress_phase = None
         self.loading_placeholder = None
         self.code_sticky_content_padding = max(0, int(code_sticky_content_padding))
         self.render_debounce_enabled = bool(render_debounce_enabled)
@@ -1664,6 +1665,9 @@ class MessageCard(QFrame):
             self.loading_timer = QTimer(self)
             self.loading_timer.setInterval(320)
             self.loading_timer.timeout.connect(self.advance_loading_frame)
+            self.work_progress_timer = QTimer(self)
+            self.work_progress_timer.setInterval(250)
+            self.work_progress_timer.timeout.connect(self.update_work_progress_phase)
             self.render_timer = QTimer(self)
             self.render_timer.setSingleShot(True)
             self.render_timer.setInterval(self.render_debounce_interval_ms)
@@ -2011,6 +2015,58 @@ class MessageCard(QFrame):
         self.refresh_loading_placeholder()
         self.notify_assistant_content_changed()
 
+    def ensure_work_progress_phase(self):
+        if self.work_progress_phase is not None:
+            return
+        if self.work_summary_phase is not None:
+            return
+        header = ThinkingPhaseHeader()
+        header.set_title("Working for 0s")
+        header.set_active(True)
+        header.set_elapsed_text("")
+        header.set_expanded(False)
+
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        layout.addWidget(header)
+        widget.setMinimumHeight(60)
+        widget.setVisible(True)
+        widget.show()
+
+        phase = {
+            "type": "work_progress",
+            "widget": widget,
+            "header": header,
+            "children": [],
+            "expanded": False,
+            "start_time": time.monotonic(),
+        }
+
+        self.body_layout.addWidget(widget)
+        self.timeline_phases.insert(0, phase)
+        self.work_progress_phase = phase
+        self.work_progress_timer.start()
+        self.body.setVisible(True)
+        self.notify_assistant_content_changed()
+        return phase
+
+    def update_work_progress_phase(self):
+        if self.work_progress_phase is None:
+            return
+        elapsed = time.monotonic() - self.work_progress_phase["start_time"]
+        self.work_progress_phase["header"].set_title(f"Working for {self.format_elapsed_time(elapsed)}")
+
+    def confirm_work_progress_done(self):
+        if self.work_progress_phase is None:
+            return
+        self.work_progress_timer.stop()
+        elapsed = time.monotonic() - self.work_progress_phase["start_time"]
+        self.work_progress_phase["header"].set_title(f"Worked for {self.format_elapsed_time(elapsed)}")
+        self.work_progress_phase["header"].set_active(False)
+        self.work_progress_phase = None
+
     def ensure_work_summary_for_final(self, final_phase):
         if self.work_summary_phase is not None:
             return
@@ -2028,6 +2084,10 @@ class MessageCard(QFrame):
                 self.remove_phase_widget(phase)
                 if phase in self.timeline_phases:
                     self.timeline_phases.remove(phase)
+        if self.work_progress_phase is not None:
+            self.work_progress_timer.stop()
+            self.remove_phase_widget(self.work_progress_phase)
+            self.work_progress_phase = None
         if work_phases:
             summary_phase = self.create_work_summary_phase(work_phases)
             tail_phases = [phase for phase in self.timeline_phases if phase not in previous_phases]
@@ -2104,12 +2164,13 @@ class MessageCard(QFrame):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(8)
 
-        header = ThinkingPhaseHeader()
-        header.set_title("Worked")
-        header.set_active(False)
-        header.set_elapsed_text(self.format_elapsed_time(
+        elapsed = self.format_elapsed_time(
             sum(self.phase_elapsed_seconds(phase) for phase in child_phases)
-        ))
+        )
+        header = ThinkingPhaseHeader()
+        header.set_title(f"Worked for {elapsed}")
+        header.set_active(False)
+        header.set_elapsed_text("")
         layout.addWidget(header)
 
         body_container = QWidget()
@@ -2286,7 +2347,7 @@ class MessageCard(QFrame):
             self.loading_active = False
             if self.loading_timer.isActive():
                 self.loading_timer.stop()
-        show_placeholder = self.loading_active and not self.has_answer_or_tool_phase()
+        show_placeholder = self.loading_active and not self.has_answer_or_tool_phase() and self.work_progress_phase is None
         if show_placeholder:
             placeholder = self.ensure_loading_placeholder()
             segment = {
@@ -2430,6 +2491,7 @@ class MessageCard(QFrame):
 
     def append_text(self, token):
         if self.role == "assistant":
+            self.ensure_work_progress_phase()
             self.raw_text += token
             if self.active_stream_phase is None or self.active_stream_phase.get("type") != "content":
                 self.finish_active_thinking_phase()
@@ -2489,6 +2551,7 @@ class MessageCard(QFrame):
     def append_thinking(self, token, visible):
         if self.role != "assistant":
             return
+        self.ensure_work_progress_phase()
         self.thinking_text += token
         if self.render_timer is not None and self.render_timer.isActive():
             self.flush_pending_render()
