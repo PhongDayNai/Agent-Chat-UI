@@ -1,9 +1,9 @@
 # Agent Chat UI
 
-Version: 2.0
+Version: 2.1
 
 Agent Chat UI is a PyQt6 desktop chat client for OpenAI-compatible chat
-completion APIs. The v2.0 release splits the app into Chat, Character, and
+completion APIs. The v2.1 release splits the app into Chat, Character, and
 Agent modes so new users see fewer unrelated controls while local agent
 workflows still have terminal access when needed. API key secrets are stored in
 the operating system keychain when available.
