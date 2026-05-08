@@ -2,7 +2,22 @@
 
 All notable changes to Agent Chat UI are documented in this file.
 
-## [2.0 beta] - 2026-04-30
+## [2.1] - 2026-05-08
+
+### Added
+
+- Added work progress phase that shows "Working for Xs" during AI response generation
+- Added final answer split protocol with `[[final_answer]]` marker
+- Added runtime limits controls in config
+
+### Changed
+
+- Reordered ThinkingPhaseHeader layout: title → timer → arrow with reduced spacing
+- Changed "Worked" to "Worked for {timer}" in work summary header
+- Rendered assistant messages as phased timeline with collapsible work phases
+- Collapsed work phases during final answers for cleaner presentation
+
+## [2.0] - 2026-04-30
 
 ### Added
 
@@ -44,5 +59,6 @@ All notable changes to Agent Chat UI are documented in this file.
 
 - Continued storing API key metadata in the app config while moving secret values into the operating system keychain when available.
 
-[2.0 beta]: https://github.com/PhongDayNai/Agent-Chat-UI/compare/v1.2...HEAD
+[2.1]: https://github.com/PhongDayNai/Agent-Chat-UI/compare/v2.0...HEAD
+[2.0 beta]: https://github.com/PhongDayNai/Agent-Chat-UI/compare/v1.2...v2.0
 [1.2]: https://github.com/PhongDayNai/Agent-Chat-UI/releases/tag/v1.2
