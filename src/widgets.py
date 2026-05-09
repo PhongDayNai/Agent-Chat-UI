@@ -1993,6 +1993,11 @@ class MessageCard(QFrame):
             self.work_progress_phase["header"].set_title(self._work_state.title_text)
             self.work_progress_phase["header"].set_active(False)
             self.work_progress_phase = None
+        # Ensure work_summary is created from final content phase if work content exists
+        if self.timeline_phases:
+            final_phase = self.timeline_phases[-1]
+            if final_phase.get("type") == "content" and self.phase_has_work_content(final_phase):
+                self.ensure_work_summary_for_final(final_phase)
 
     def mark_final_answer_started(self):
         if self.role != "assistant":
