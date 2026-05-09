@@ -88,35 +88,29 @@ TERMINAL_SHELL_NAME = "PowerShell" if IS_WINDOWS else "Bash"
 TERMINAL_SHELL_DESCRIPTION = "PowerShell" if IS_WINDOWS else "bash"
 FINAL_ANSWER_MARKER = "[[final_answer]]"
 FINAL_ANSWER_PROTOCOL_PROMPT = f"""
-Agent/tool workflow UI protocol:
-- Use normal assistant content for brief progress notes and tool requests while working.
-- When all reasoning and tool work is complete and you are starting the final user-facing answer, write this split marker on its own line immediately before the final answer:
-{FINAL_ANSWER_MARKER}
-- This is a one-way split marker, not an XML/HTML tag. Do not write a closing marker.
-- Do not write this marker before terminal commands, tool calls, MCP calls, progress notes, or partial answers.
-- The app hides the marker and collapses earlier reasoning/tool phases so the final answer is focused.
+## Agent/tool workflow UI protocol:
+- **Phase 1: Execution & Reasoning**: Use normal assistant text for progress notes and tool requests.
+- **Phase 2: Transition**: When all reasoning and tool work is complete, write the marker `[[final_answer]]` on its own line.
+- **Phase 3: Final Delivery**:
+    - This phase is for pure text communication with the user only.
+    - **STRICT PROHIBITION**: Do NOT include `<terminal_command>`, tool calls, or any functional tags after the `[[final_answer]]` marker.
+    - The marker is an absolute "Point of No Return": once written, all system interactions must cease.
+- The UI will collapse Phase 1 and 2, showing only what follows the marker.
 """.strip()
 
 
 def agent_terminal_prompt(workspace_path):
     return f"""
-You are running inside a local desktop chat app with terminal access enabled.
-When you need to inspect files or change the workspace, request exactly one terminal command by writing:
-
-<terminal_command>
-command here
-</terminal_command>
-
-Rules:
-- If the user explicitly asks you to run, execute, check, inspect with, or show the output of a terminal command, request that command with a terminal_command tag instead of saying you cannot run commands.
-- Run commands only when they are useful for the user's request.
-- Terminal commands are executed only when the terminal_command tag appears in the assistant message content.
-- Terminal commands mentioned only in reasoning or thinking are ignored and will not be executed.
-- If you need a command to run, place exactly one terminal_command tag in the assistant message content, not only in reasoning or thinking.
+## Terminal Execution Rules:
+- Request exactly one command at a time using: `<terminal_command>command here</terminal_command>`.
+- **Pre-condition**: Terminal commands are only allowed BEFORE the `[[final_answer]]` marker.
+- **Completion Criteria**:
+    - If the user asks to "run", "inspect", or "execute", you must perform these tasks and observe the output first.
+    - Only after the task is finished, provide a summary starting with `[[final_answer]]`.
+- **Integrity Check**: Never include terminal commands before or after the `[[final_answer]]` marker. The final answer must be a clean, non-executable summary for the user.
 - The command runs with {TERMINAL_SHELL_DESCRIPTION} in this workspace: {workspace_path}
 - After terminal output is returned, continue from the result.
 - Do not invent terminal output.
-- When the task is complete, start the final answer with {FINAL_ANSWER_MARKER} and do not include a terminal_command tag.
 """.strip()
 
 
