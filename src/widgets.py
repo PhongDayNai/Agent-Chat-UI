@@ -1766,7 +1766,7 @@ class MessageCard(QFrame):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(10)
         widget.setVisible(False)
-        phase = {"type": "content", "text": "", "widget": widget, "layout": layout, "final": bool(final)}
+        phase = {"type": "content", "text": "", "widget": widget, "layout": layout, "final": bool(final), "started_at": time.monotonic()}
         self.timeline_phases.append(phase)
         self.body_layout.addWidget(widget)
         return phase
@@ -2285,15 +2285,21 @@ class MessageCard(QFrame):
         return False
 
     def phase_elapsed_seconds(self, phase):
-        if phase.get("type") == "thinking":
+        phase_type = phase.get("type")
+        if phase_type == "thinking":
             started_at = phase.get("started_at")
             if started_at is None:
                 return 0.0
             return max(0.0, (phase.get("ended_at") or time.monotonic()) - started_at)
-        if phase.get("type") == "terminal":
+        if phase_type == "terminal":
             block = phase.get("widget")
             if hasattr(block, "elapsed_seconds"):
                 return block.elapsed_seconds()
+        if phase_type == "content":
+            started_at = phase.get("started_at")
+            if started_at is None:
+                return 0.0
+            return max(0.0, time.monotonic() - started_at)
         return 0.0
 
     def layout_widget_index(self, layout, target):
