@@ -64,6 +64,7 @@ from markdown_utils import (
     split_markdown_code_segments,
 )
 from styles import MARKDOWN_STYLESHEET, THINKING_MARKDOWN_STYLESHEET
+from viewmodels.message_card_state import MessageCardState
 
 def format_elapsed_time_text(elapsed):
     total_seconds = max(0, int(elapsed))
@@ -1672,6 +1673,10 @@ class MessageCard(QFrame):
             self.render_timer.setSingleShot(True)
             self.render_timer.setInterval(self.render_debounce_interval_ms)
             self.render_timer.timeout.connect(self.flush_pending_render)
+
+            self._work_state = MessageCardState()
+            self._work_state.progress_updated.connect(self._on_work_progress_updated)
+            self._work_state.phase_completed.connect(self._on_work_phase_completed)
         else:
             self.body = AutoHeightTextBrowser()
             self.body.document().setDefaultStyleSheet(MARKDOWN_STYLESHEET)
@@ -1982,6 +1987,12 @@ class MessageCard(QFrame):
 
     def finish_streaming(self):
         self.finish_active_thinking_phase()
+        if self.work_progress_phase is not None:
+            self.work_progress_timer.stop()
+            self._work_state.complete_progress()
+            self.work_progress_phase["header"].set_title(self._work_state.title_text)
+            self.work_progress_phase["header"].set_active(False)
+            self.work_progress_phase = None
 
     def mark_final_answer_started(self):
         if self.role != "assistant":
@@ -2041,29 +2052,40 @@ class MessageCard(QFrame):
             "header": header,
             "children": [],
             "expanded": False,
-            "start_time": time.monotonic(),
         }
 
         self.body_layout.addWidget(widget)
         self.timeline_phases.insert(0, phase)
         self.work_progress_phase = phase
+        self._work_state.start_progress()
         self.work_progress_timer.start()
         self.body.setVisible(True)
         self.notify_assistant_content_changed()
         return phase
 
     def update_work_progress_phase(self):
-        if self.work_progress_phase is None:
-            return
-        elapsed = time.monotonic() - self.work_progress_phase["start_time"]
-        self.work_progress_phase["header"].set_title(f"Working for {self.format_elapsed_time(elapsed)}")
+        self._work_state.update_progress()
+
+    def _on_work_progress_updated(self, elapsed):
+        """Slot for work_state.progress_updated signal."""
+        if self.work_progress_phase is not None:
+            self.work_progress_phase["header"].set_title(
+                self._work_state.title_text
+            )
+
+    def _on_work_phase_completed(self, elapsed):
+        """Slot for work_state.phase_completed signal."""
+        if self.work_progress_phase is not None:
+            self.work_progress_phase["header"].set_title(
+                self._work_state.title_text
+            )
 
     def confirm_work_progress_done(self):
         if self.work_progress_phase is None:
             return
         self.work_progress_timer.stop()
-        elapsed = time.monotonic() - self.work_progress_phase["start_time"]
-        self.work_progress_phase["header"].set_title(f"Worked for {self.format_elapsed_time(elapsed)}")
+        self._work_state.complete_progress()
+        self.work_progress_phase["header"].set_title(self._work_state.title_text)
         self.work_progress_phase["header"].set_active(False)
         self.work_progress_phase = None
 
@@ -2086,6 +2108,7 @@ class MessageCard(QFrame):
                     self.timeline_phases.remove(phase)
         if self.work_progress_phase is not None:
             self.work_progress_timer.stop()
+            self._work_state.complete_progress()
             self.remove_phase_widget(self.work_progress_phase)
             self.work_progress_phase = None
         if work_phases:
