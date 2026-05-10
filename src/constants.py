@@ -87,31 +87,36 @@ MAX_AGENT_TERMINAL_STEPS = 6
 TERMINAL_SHELL_NAME = "PowerShell" if IS_WINDOWS else "Bash"
 TERMINAL_SHELL_DESCRIPTION = "PowerShell" if IS_WINDOWS else "bash"
 FINAL_ANSWER_MARKER = "[[final_answer]]"
-FINAL_ANSWER_PROTOCOL_PROMPT = f"""
-## Agent/tool workflow UI protocol:
-- **Phase 1: Execution & Reasoning**: Use normal assistant text for progress notes and tool requests.
-- **Phase 2: Transition**: When all reasoning and tool work is complete, write the marker `[[final_answer]]` on its own line.
-- **Phase 3: Final Delivery**:
-    - This phase is for pure text communication with the user only.
-    - **STRICT PROHIBITION**: Do NOT include `<terminal_command>`, tool calls, or any functional tags after the `[[final_answer]]` marker.
-    - The marker is an absolute "Point of No Return": once written, all system interactions must cease.
-- The UI will collapse Phase 1 and 2, showing only what follows the marker.
-""".strip()
+FINAL_ANSWER_PROTOCOL_PROMPT = """
+## AGENT WORKFLOW & UI PROTOCOL:
+1. **WORK PHASE (Mandatory for Tools)**:
+   - All reasoning, terminal commands, and tool calls MUST happen here.
+   - Use brief progress notes.
+   - **Constraint**: This phase remains "open" as long as you are performing actions.
+
+2. **THE FINAL MARKER**:
+   - You must output exactly `[[final_answer]]` on its own line ONLY when all technical work is 100% complete.
+   - This marker is a **HARD BARRIER**. It is not a label; it is a system command to switch modes.
+
+3. **FINAL ANSWER PHASE (Post-Marker)**:
+   - This phase starts IMMEDIATELY after `[[final_answer]]`.
+   - **STRICT PROHIBITION**: Do not request terminal commands, do not use XML tags, and do not perform any further reasoning.
+   - Content must be 100% human-readable text only.
+   - If you need to run one more command, you ARE NOT ready to write the marker.
+"""
+
+
+AGENT_TERMINAL_PROMPT = """
+## TERMINAL EXECUTION COMMANDS:
+- **Usage**: Request exactly one command using `<terminal_command>command</terminal_command>`.
+- **Placement**: Terminal commands are strictly forbidden after the `[[final_answer]]` marker.
+- **Verification Loop**:
+    1. Run command -> Observe output -> Repeat if necessary.
+    2. Once the result is achieved, verify it.
+    3. ONLY THEN, write `[[final_answer]]` and provide the final text summary.
+- **Zero-Tolerance**: If you write `[[final_answer]]`, your ability to execute code is terminated for that turn. Do not attempt to "summarize and then run one last check". Finish the check FIRST, then end with the marker.
+"""
 
 
 def agent_terminal_prompt(workspace_path):
-    return f"""
-## Terminal Execution Rules:
-- Request exactly one command at a time using: `<terminal_command>command here</terminal_command>`.
-- **Pre-condition**: Terminal commands are only allowed BEFORE the `[[final_answer]]` marker.
-- **Completion Criteria**:
-    - If the user asks to "run", "inspect", or "execute", you must perform these tasks and observe the output first.
-    - Only after the task is finished, provide a summary starting with `[[final_answer]]`.
-- **Integrity Check**: Never include terminal commands before or after the `[[final_answer]]` marker. The final answer must be a clean, non-executable summary for the user.
-- The command runs with {TERMINAL_SHELL_DESCRIPTION} in this workspace: {workspace_path}
-- After terminal output is returned, continue from the result.
-- Do not invent terminal output.
-""".strip()
-
-
-AGENT_TERMINAL_PROMPT = agent_terminal_prompt(APP_WORKSPACE)
+    return AGENT_TERMINAL_PROMPT

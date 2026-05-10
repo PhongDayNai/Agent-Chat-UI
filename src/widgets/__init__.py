@@ -1,12 +1,14 @@
-"""Re-export all widgets from submodules for backward compatibility."""
+"""Re-export all widgets for backward compatibility."""
 
-from widgets import (
-    elided_text_lines,
+from .button_widgets import (
     ThinkingPhaseHeader,
     ThinkingTitleLabel,
     RotatingSvgButton,
     SvgActionButton,
     PinIconButton,
+    elided_text_lines,
+)
+from .input_widgets import (
     AutoHeightTextBrowser,
     AutoResizingTextEdit,
     DeletableHistoryComboBox,
@@ -15,15 +17,25 @@ from widgets import (
     NoWheelSpinBox,
     link_hover_tooltip,
     show_widget_toast,
+)
+from .attachment_widgets import (
     AttachmentChip,
     ImagePreviewButton,
+)
+from .code_widgets import (
     AssistantCodeBlock,
     AssistantCodeTextEdit,
     StickyCodeHeader,
+)
+from .terminal_widgets import (
     AssistantCodeHighlighter,
     TerminalCommandBlock,
+)
+from .dialog_widgets import (
     FilePreviewDialog,
     ImageGalleryDialog,
+)
+from .message_card import (
     ContentPhaseHeader,
     MessageCard,
 )
