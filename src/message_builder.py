@@ -5,16 +5,20 @@ from constants import FINAL_ANSWER_PROTOCOL_PROMPT
 from modes import MODE_AGENT, MODE_CHARACTER
 
 DEFAULT_RESPONSE_STYLE_INSTRUCTION = (
-    "Respond in the same language the user uses. Address the user with the same "
-    "tone, pronouns, and form of address that the user uses with you."
+    "Response style: Respond in the same language the user uses. "
+    "Address the user with the same tone, pronouns, and form of address."
 )
 
 
 def build_messages(config, history, user_message, terminal_instruction=None, mcp_instruction=None):
     mode = config.get("active_mode", "chat")
     messages = []
-    sections = [DEFAULT_RESPONSE_STYLE_INSTRUCTION]
+    sections = []
 
+    # 1. SOFT rules (lowest priority) - Style that can be overridden by session_prompt
+    sections.append(DEFAULT_RESPONSE_STYLE_INSTRUCTION)
+
+    # 2. MEDIUM priority: Character mode rules
     if mode == MODE_CHARACTER:
         profiles = config.get("character_profiles", {})
         character = get_active_character(profiles)
@@ -35,20 +39,22 @@ def build_messages(config, history, user_message, terminal_instruction=None, mcp
         if caps.get("mcp") and mcp_instruction:
             sections.append(mcp_instruction)
 
-    else:
-        if mode == MODE_AGENT:
-            sections.append(FINAL_ANSWER_PROTOCOL_PROMPT)
-
-        if mode == MODE_AGENT and terminal_instruction:
-            sections.append(terminal_instruction)
-
-        if mode == MODE_AGENT and mcp_instruction:
-            sections.append(mcp_instruction)
-
+    # 3. MEDIUM priority: Session prompt (can override style, but not hard rules)
+    if mode != MODE_CHARACTER:
         session_prompt = config.get("session_prompt", {})
         value = str(session_prompt.get("value", "")).strip()
         if session_prompt.get("enabled") and value:
             sections.append(value)
+
+    # 4. HARD rules (highest priority - cannot be overridden)
+    if mode == MODE_AGENT:
+        sections.append(FINAL_ANSWER_PROTOCOL_PROMPT)
+
+    if mode == MODE_AGENT and terminal_instruction:
+        sections.append(terminal_instruction)
+
+    if mode == MODE_AGENT and mcp_instruction:
+        sections.append(mcp_instruction)
 
     if sections:
         messages.append({"role": "system", "content": "\n\n".join(sections)})
