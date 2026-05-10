@@ -64,21 +64,8 @@ from markdown_utils import (
     split_markdown_code_segments,
 )
 from styles import MARKDOWN_STYLESHEET, THINKING_MARKDOWN_STYLESHEET
+from viewmodels.phase_utils import format_elapsed_time_text
 from viewmodels.message_card_state import MessageCardState
-
-def format_elapsed_time_text(elapsed):
-    total_seconds = max(0, int(elapsed))
-    hours = total_seconds // 3600
-    minutes = (total_seconds % 3600) // 60
-    seconds = total_seconds % 60
-    parts = []
-    if hours:
-        parts.append(f"{hours}h")
-    if minutes:
-        parts.append(f"{minutes}m")
-    if seconds or not parts:
-        parts.append(f"{seconds}s")
-    return "".join(parts)
 
 def elided_text_lines(text, font, width, max_lines=2):
     text = " ".join(str(text or "").split())
@@ -2036,8 +2023,9 @@ class MessageCard(QFrame):
             return
         if self.work_summary_phase is not None:
             return
+        self._work_state.start_progress()
         header = ThinkingPhaseHeader()
-        header.set_title("Working for 0s")
+        header.set_title(self._work_state.title_text)
         header.set_active(True)
         header.set_elapsed_text("")
         header.set_expanded(False)
@@ -2062,7 +2050,6 @@ class MessageCard(QFrame):
         self.body_layout.addWidget(widget)
         self.timeline_phases.insert(0, phase)
         self.work_progress_phase = phase
-        self._work_state.start_progress()
         self.work_progress_timer.start()
         self.body.setVisible(True)
         self.notify_assistant_content_changed()
@@ -2192,11 +2179,10 @@ class MessageCard(QFrame):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(8)
 
-        elapsed = self.format_elapsed_time(
-            sum(self.phase_elapsed_seconds(phase) for phase in child_phases)
-        )
+        total_elapsed = sum(self.phase_elapsed_seconds(phase) for phase in child_phases)
+        elapsed_formatted = format_elapsed_time_text(total_elapsed)
         header = ThinkingPhaseHeader()
-        header.set_title(f"Worked for {elapsed}")
+        header.set_title(f"Worked for {elapsed_formatted}")
         header.set_active(False)
         header.set_elapsed_text("")
         layout.addWidget(header)
